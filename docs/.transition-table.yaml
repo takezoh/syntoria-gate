@@ -1,0 +1,44 @@
+# Allowed state transitions for structured documents managed by the dev-docs skill.
+# Copied to the project docs/.transition-table.yaml by docs init.
+# Edit this file to extend the status enumeration for a project
+# (and update the corresponding schema status enumeration).
+#
+# Format: kind: { from_status: [allowed_next_status, ...] }
+# An empty array [] denotes a terminal state with no subsequent transitions.
+
+adr:
+  proposed:   [accepted, rejected]
+  accepted:   [deprecated, superseded]
+  rejected:   []
+  deprecated: []
+  superseded: []
+
+change:
+  draft:     [ready, abandoned]
+  ready:     [active, abandoned]
+  active:    [closing, abandoned]
+  closing:   [active, done, abandoned]
+  done:      []
+  abandoned: []
+
+task:
+  todo:        [in_progress, blocked, cancelled]
+  in_progress: [blocked, done, cancelled]
+  blocked:     [todo, in_progress, cancelled]
+  done:        []
+  cancelled:   []
+
+note:
+  draft:     [published, archived]
+  published: [archived]
+  archived:  []
+
+issue:
+  open:     [done, rejected]
+  done:     []
+  rejected: []
+
+design:
+  active:     [deprecated, superseded]
+  deprecated: []
+  superseded: []

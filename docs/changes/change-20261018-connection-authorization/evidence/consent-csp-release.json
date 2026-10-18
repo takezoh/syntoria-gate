@@ -1,0 +1,83 @@
+{
+  "observed_at": "2026-10-18T10:20:45.716511+00:00",
+  "problem": "Consent form-action self blocks browser redirects to registered external callback; fetch-only protocol tests do not enforce browser CSP",
+  "source_base_commit": "b94726f05183180e3b6ba8300ebd400fa6fba57b",
+  "source_dirty": true,
+  "source_sha256": {
+    "Dockerfile": "83869cbb6ee0b0370dd6deebf25002c5814f1a368f92f8169efac855ee91d224",
+    "package-lock.json": "ce54b701d4ec91690ba4e496b6edfe190fb6fbf3d91414a551318c5c2013fc2c",
+    "package.json": "ddbf772d732852a78125482dc99cd5e74955fa3ff18cc239fd847deef603c83c",
+    "packages/sdk/package.json": "ed6d0ed4f176c809a16ab7e5f490cd4aab7148edfebd9e8664d8727b786c67f6",
+    "packages/sdk/src/index.ts": "727f18e789ab5f86751b00539d97f18e96ec86753afac6510ca0557d74b726ec",
+    "packages/sdk/tsconfig.json": "fd819a3850fb31d6988d29a2ba17d5716ecccf81582696f66c4f5f8ac02abf3a",
+    "src/config.ts": "d6df500bfab3b6d64eba32cda0bb62f0e79f701e285cae5669e15793712962d3",
+    "src/main.ts": "e4c4a8f4a0dfd803f0ebee5d29b0244e733eb8a34f09d7603ccaeccd0a026d41",
+    "src/service.ts": "d750b6fb4f11478c6f53ffbdf032fcae9f636d9189af8c6628742b0f2172dd1c",
+    "src/storage.ts": "4afd174a88af744b9191549c00888c8d83d9f06e3f402fd105cf1ef7cd8b3c07",
+    "tsconfig.json": "d23a0aedab26bd6b247eeaaaa1bfa666db8957b3decba7554821db488ecc905d"
+  },
+  "image_digest": "sha256:22d6cc83a74998280e7b9d7196dbc380f37e1a1959bd334a5bdfcec5bef5de5d",
+  "manifest_sha256": "86773021803114ce7e1e365478052a8287ab83006a407c9978bd9953ca092ca5",
+  "local_checks": {
+    "npm_check": 44,
+    "npm_build": "passed",
+    "firestore_emulator_provider_integration": "passed",
+    "minimal_browser_reproduction": {
+      "self_only": {
+        "callback_visits": 0,
+        "csp_blocked": true
+      },
+      "registered_origin_allowed": {
+        "callback_visits": 1,
+        "csp_blocked": false
+      }
+    },
+    "real_service_browser": {
+      "status": "passed",
+      "browser": "Chromium",
+      "realProvider": true,
+      "firestore": "emulator",
+      "externalGitHub": "synthetic test port only",
+      "results": [
+        {
+          "forceSelfOnly": false,
+          "callbackReached": true,
+          "cspBlocked": false
+        }
+      ]
+    }
+  },
+  "hosted_user_browser_acceptance": "pending",
+  "credentials_in_evidence": false,
+  "deployment": {
+    "status": {
+      "conditions": [
+        {
+          "lastTransitionTime": "2026-10-18T10:20:31.981477Z",
+          "status": "True",
+          "type": "Ready"
+        },
+        {
+          "lastTransitionTime": "2026-10-18T10:20:30.911112Z",
+          "status": "True",
+          "type": "ConfigurationsReady"
+        },
+        {
+          "lastTransitionTime": "2026-10-18T10:20:31.912521Z",
+          "status": "True",
+          "type": "RoutesReady"
+        }
+      ],
+      "latestReadyRevisionName": "gate-api-00002-fwv"
+    }
+  },
+  "hosted_readiness": 200,
+  "hosted_oidc_metadata": 200,
+  "external_healthz_status": 404,
+  "implementation_profile": {
+    "status": "not completed",
+    "reason": "execution-mutation-outside-scope: parent documentation/evidence changed during child invocation",
+    "candidate_implementation_checks": "passed",
+    "independent_profile_quality": "not completed"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name":"@syntoria/gate-sdk","version":"0.1.0","type":"module","description":"Online connection authorization for Syntoria resource servers",
+  "engines":{"node":">=24"},"main":"./dist/index.js","types":"./dist/index.d.ts",
+  "exports":{".":{"types":"./dist/index.d.ts","import":"./dist/index.js"}},"files":["dist"],"license":"Apache-2.0"
+}

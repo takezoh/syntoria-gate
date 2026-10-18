@@ -1,0 +1,13 @@
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/**
+!packages/
+!packages/sdk/
+!packages/sdk/package.json
+!packages/sdk/tsconfig.json
+!packages/sdk/src/
+!packages/sdk/src/**

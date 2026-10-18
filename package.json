@@ -1,0 +1,31 @@
+{
+  "name": "syntoria-gate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "npm@11.13.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p packages/sdk/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/sdk/tsconfig.json --noEmit",
+    "test": "npm run build && node scripts/run-tests.mjs",
+    "check": "npm run typecheck && npm test",
+    "test:integration": "npm run build && node scripts/run-integration.mjs",
+    "start": "node dist/main.js",
+    "emulator": "node scripts/emulator.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/oidc-provider": "^9.12.1",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "9.3.1",
+    "oidc-provider": "9.12.2"
+  }
+}

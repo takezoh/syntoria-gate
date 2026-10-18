@@ -1,0 +1,20 @@
+{
+  "issuer": "https://gate.example.test",
+  "sessionCookieDomain": "example.test",
+  "githubUserId": "12345",
+  "clients": [
+    {
+      "client_id": "weave-mcp",
+      "client_name": "MCP client",
+      "redirect_uris": ["http://127.0.0.1:55437/callback"]
+    }
+  ],
+  "browserApps": [
+    {
+      "app_id": "action-tools",
+      "app_name": "Actions",
+      "redirect_uris": ["https://actions.example.test/auth-return.html"]
+    }
+  ],
+  "browserSessionTtlSeconds": 2592000
+}

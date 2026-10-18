@@ -1,0 +1,30 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "gate-api", "namespace": "123456789012", "annotations": {"run.googleapis.com/ingress": "all"}},
+  "spec": {"template": {
+    "metadata": {"annotations": {"autoscaling.knative.dev/minScale": "0", "autoscaling.knative.dev/maxScale": "3", "run.googleapis.com/execution-environment": "gen2"}},
+    "spec": {
+      "serviceAccountName": "gate-runtime@example-project.iam.gserviceaccount.com",
+      "containerConcurrency": 40,
+      "timeoutSeconds": 30,
+      "containers": [{
+        "image": "IMAGE_DIGEST",
+        "ports": [{"containerPort": 3000}],
+        "resources": {"limits": {"cpu": "1", "memory": "512Mi"}},
+        "startupProbe": {"httpGet": {"path": "/readyz", "port": 3000}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 24},
+        "livenessProbe": {"httpGet": {"path": "/healthz", "port": 3000}, "periodSeconds": 30, "timeoutSeconds": 2, "failureThreshold": 3},
+        "env": [
+          {"name": "NODE_ENV", "value": "production"},
+          {"name": "GATE_FIRESTORE_PROJECT_ID", "value": "example-project"},
+          {"name": "GATE_FIRESTORE_DATABASE_ID", "value": "gate"},
+          {"name": "GATE_GITHUB_CLIENT_ID", "valueFrom": {"secretKeyRef": {"name": "gate-github-client-id", "key": "1"}}},
+          {"name": "GATE_GITHUB_CLIENT_SECRET", "valueFrom": {"secretKeyRef": {"name": "gate-github-client-secret", "key": "1"}}},
+          {"name": "GATE_COOKIE_KEYS", "valueFrom": {"secretKeyRef": {"name": "gate-cookie-keys", "key": "1"}}},
+          {"name": "GATE_JWKS", "valueFrom": {"secretKeyRef": {"name": "gate-jwks", "key": "1"}}},
+          {"name": "GATE_RESOURCES", "valueFrom": {"secretKeyRef": {"name": "gate-resources", "key": "2"}}}
+        ]
+      }]
+    }
+  }}
+}

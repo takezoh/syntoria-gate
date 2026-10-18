@@ -1,0 +1,31 @@
+{
+  "observed_at": "2026-10-18T11:42:01Z",
+  "source_sha256": {
+    "infra/terraform/main.tf": "ef45cf9ccff8ac253f3dd7551ce421d27e32375a61ea9866cdf07e1c87adb1d9",
+    "src/storage.ts": "3fd588b7231c88e1d976df1901a9607a0d47a585d87d1ae7b07319be4c33d991"
+  },
+  "terraform": {
+    "version": "1.13.4",
+    "fmt_check": "passed",
+    "validate": "passed",
+    "plan_or_apply": "not_run"
+  },
+  "ttl_declarations": {
+    "field": "expiresAt",
+    "enabled_collections": [
+      "entries",
+      "gate_browser_login_attempts",
+      "gate_browser_approvals",
+      "gate_browser_sessions",
+      "gate_identity_sessions"
+    ],
+    "gate_connections": "disabled"
+  },
+  "authorization": {
+    "expiry_checks_remain_in_application": true,
+    "ttl_cleanup_is_asynchronous": true,
+    "connection_revocation_records_remain_durable": true
+  },
+  "credentials_in_evidence": false,
+  "hosted_policy_status": "not_verified"
+}
