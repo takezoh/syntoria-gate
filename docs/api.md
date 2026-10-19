@@ -4,7 +4,7 @@ All paths are relative to the configured HTTPS issuer. Gate serves HTML for its 
 
 ## Discovery and OAuth
 
-Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, supported PKCE methods and JWKS. Use the advertised endpoints rather than hard-coding `oidc-provider` routes. Only public OAuth clients registered in `GATE_CLIENTS` can start the authorization-code flow. Resource clients authenticate introspection using their private credentials and are restricted to their configured audience.
+Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, supported PKCE methods and JWKS. Use the advertised endpoints rather than hard-coding `oidc-provider` routes. The metadata advertises `registration_endpoint` for public MCP clients. POST bounded JSON public-client metadata there to obtain a server-generated `client_id` with HTTP 201. Gate issues no client secret, registration access token or management endpoint. Registration alone grants no access; authorization requires personal login, connection approval and PKCE S256. Invalid metadata returns 400, oversized bodies 413, exhausted registration rate/capacity 429, and registration storage unavailability 503. See [registration constraints](configuration.md#registrations). Resource clients authenticate introspection using their private credentials and are restricted to their configured audience.
 
 `GET /github/callback` is Gate's internal GitHub OAuth return endpoint. It consumes a bound, expiring, single-use state and checks the returned immutable numeric GitHub ID against the configured account. A different account is rejected with 403. Applications must start a login flow rather than constructing a callback URL or approval transaction themselves.
 
@@ -42,7 +42,7 @@ The SDK handles the private resource Basic authentication encoding. A resource c
 }
 ```
 
-`exp` is Unix epoch seconds. Inactive, expired, malformed session secrets or revoked connections return `{active:false}` after resource authentication. Missing/wrong resource credentials return 401, an audience mismatch returns 403, and malformed request structure returns 400. Storage failures on browser paths return 503. A successful response must still be checked by the resource's SDK and its local user/client admission policy.
+`exp` is Unix epoch seconds. Inactive, expired, malformed session secrets or revoked connections return `{active:false}` after resource authentication. Missing/wrong resource credentials return 401, an audience mismatch returns 403, and malformed request structure returns 400. Storage failures on browser paths return 503. A successful response must still be checked by the resource's SDK and its local enabled issuer/subject admission policy.
 
 ## Management and health
 

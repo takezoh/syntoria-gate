@@ -1,0 +1,100 @@
+{
+  "recorded_at": "2026-10-19T15:13:41.941950+00:00",
+  "environment": "isolated local Node 24, Firestore Emulator and real PostgreSQL 17; injected GitHub exchange only",
+  "release": false,
+  "repositories": {
+    "weave": {
+      "base_commit": "9133e896ac96985b7a5c2fbf813248771a4e9811",
+      "working_tree": true,
+      "files_sha256": {
+        "lib/server/node/authentication.ts": "eddb2fdce4807c4af6864772343bfbe0cd6ccb27544858bd4211b9eccab63d2f",
+        "lib/server/node/gate-verifier.ts": "9c914ef0e0e4116b55ec46b97ec9f64e85f9549e7f156f5b3bb22fbc993490d0",
+        "lib/server/node/config.ts": "8b136b971b9351a75ea2f9a8180601faa99dae7e56cb83ae1eaa8c50a4d6b46d",
+        "lib/adapters/postgres/identity-store.ts": "11623827eca44c5d5e1b33a93563ed2f6e33d95ce6efeab1dd678b8e4921df8a",
+        "lib/adapters/postgres/transfer.ts": "3471a06e4d49cec2a0887425c02c98fdbd179dd9113b8e3155979fff962e4287",
+        "db/postgres/migrations/0004_subject_only_identity.sql": "913d5e3ee18c5603319e4109615e31e8130f61901c73f182afa933f21cff4d96",
+        "lib/mcp/local/oauth.mjs": "0b8eeb06dec6a02966f3c8481dcfdf2dcb5c30635428e8d0f3dafbcf649922c6",
+        "lib/mcp/local/state-store.mjs": "3d32f1f4aecbcc50457653115858c8dde4e72ebf0cd7c0628fedcbc4a8120faf",
+        "lib/mcp/local/config.mjs": "196228eb380fd8a5871183d3e0a165ae45c3bfa8ed0024b40ed408e7e49e23da",
+        "lib/mcp/cloud-plugin/config.mjs": "1a122590d74ad6e46e1ec18059812ce582ea21dd00f20e8a1b5aca889077b67e",
+        "scripts/testing/verify-gate-integration.mjs": "124e5ae16cc056f468eb97427ab7757f2a856216e95a4a6ea7bfa74dbd82528e"
+      },
+      "artifacts_sha256": {
+        "dist/server/index.mjs": "bc1673b7da30ed6ddc0ee7f1fbc799063acc0dedde4939e8b96ce681f9b50a06",
+        "dist/local/server.mjs": "8a692dec6a2d218986b6891364788684e7eef2e810e9042affde173158780781",
+        "dist/spa/workspace.html": "32b001406fbfd284ef52fff25a0fcd85739f8f5fe7989057f32a62e837ada90b",
+        "dist/plugin/artifact-manifest.json": "2aa71d669990c987b002a9b508bb8bf6bdc44e5eca81b1190c9e1a20df3a4971"
+      }
+    },
+    "gate": {
+      "base_commit": "d91a5a450c358ba99af65dd4a7b7146fd0cf8bf5",
+      "working_tree": true,
+      "files_sha256": {
+        "src/service.ts": "6724bcd300bda7aef1fbcdb9c8355f93617af3707210b5c15420f4cdde34dba4",
+        "src/storage.ts": "d3bee8e50aaddfc504f06802909c25d98e4bb91181c56489008589ec25b7a793",
+        "src/registration.ts": "1dda1f3c8196ddfbf9a45f6a8b73dda11d0f7136381e15cfd7c01f2836276dcb",
+        "src/config.ts": "d87446d478b7ce4ab8ee66b769901effc3da2aa7710cab0291b9c080541f772e",
+        "packages/sdk/src/index.ts": "9c914ef0e0e4116b55ec46b97ec9f64e85f9549e7f156f5b3bb22fbc993490d0",
+        "scripts/runtime-config.mjs": "df48962c9b633cfb38cce482a2c197ae8e1fc651efe160c9db5ed62086629fd2",
+        "tests/provider.test.mjs": "09f73f4107a7d52fe92da699a5099d511bc7f32e485fd2850ba37616483f1eca"
+      },
+      "artifacts_sha256": {
+        "dist/service.js": "dd694e9b7dc2b83bd48d742b9a0389d2df24ce74c39de29de09ab2dfa4765eec",
+        "dist/storage.js": "2a8ea1cd920a7366f08ca5faf81fc20c2ffae0bb36cd370397d2aee594aea7c1",
+        "dist/registration.js": "37ccb61fd84e9acc722c9c386775b2e5053e503a2345ac4bb719fc05d09576e1",
+        "packages/sdk/dist/index.js": "08f6bd72b1a9847586b615d10d818bb5406bfc56deb6bd646354703627813dcc"
+      }
+    }
+  },
+  "tests": {
+    "weave_check": {
+      "passed": 561,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "stdout_sha256": "185265a1c340797cd2de33b2b0960ed2b64ba1ff60d86f74138508f0f9d4a947"
+    },
+    "gate_check": {
+      "passed": 69,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "stdout_sha256": "48abb24a072ad22e0824c7971df18f518ec198b94e5b10165addcc6f6da9de10"
+    },
+    "gate_firestore_provider": {
+      "passed": 1,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "stdout_sha256": "014dfacf0176bb0a90665779dd5056fe775583a3c34e2e79ac1525e42f1d48af"
+    }
+  },
+  "weave_build": "passed; template-only personal package and local/server/SPA artifacts verified",
+  "built_node_postgres": "passed",
+  "actual_integration": {
+    "actual_gate_firestore_weave_postgres": "passed",
+    "explicit_browser_device_approval": true,
+    "shared_session_reused_by_second_spa": true,
+    "cross_resource_session_binding": true,
+    "direct_cookie_api_cors_csrf": true,
+    "raw_duplicate_header_rejection": true,
+    "wrong_resource": true,
+    "write_replay_undo_and_corrected_replay": true,
+    "gate_outage_and_revocation": true,
+    "independent_mcp_dcr_pkce_refresh_and_bearer": true,
+    "dynamic_client_subject_admission_and_revoke": true,
+    "maintained_local_consumer_dcr_exchange_refresh_reuse": true,
+    "weave_session_persistence": false,
+    "external_github_login": false,
+    "hosted_neon_browser_and_cloud_run": false
+  },
+  "limitations": [
+    "No production deployment or hosted Firestore/Neon acceptance.",
+    "No external GitHub login or actual ChatGPT, Claude Code or Codex host acceptance.",
+    "Registration limits bound admitted registrations, not general request volume or cost."
+  ],
+  "sdk_copy_identical": true
+}

@@ -24,7 +24,6 @@ export function renderService(manifest, image, runtimeConfig) {
   set('GATE_ISSUER', runtimeConfig.issuer);
   set('GATE_SESSION_COOKIE_DOMAIN', runtimeConfig.sessionCookieDomain);
   set('GATE_GITHUB_USER_ID', runtimeConfig.githubUserId);
-  set('GATE_CLIENTS', JSON.stringify(runtimeConfig.clients));
   set('GATE_BROWSER_APPS', JSON.stringify(runtimeConfig.browserApps));
   set('GATE_BROWSER_SESSION_TTL_SECONDS', String(runtimeConfig.browserSessionTtlSeconds));
   return rendered;

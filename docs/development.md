@@ -6,7 +6,8 @@ Use Node.js 24 and the npm version pinned in [package.json](../package.json). In
 
 | Location | Responsibility |
 | --- | --- |
-| `src/config.ts` | Environment and registration validation |
+| `src/config.ts` | Environment and browser/resource registration validation |
+| `src/registration.ts` | Pure bounded DCR metadata projection and redirect validation |
 | `src/service.ts` | HTTP composition, GitHub exchange, OIDC, HTML pages, cookies and browser CORS/CSRF |
 | `src/storage.ts` | Firestore persistence, transactional approval, expiry and durable revocation |
 | `src/main.ts` | Production configuration, storage composition and server startup |

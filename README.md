@@ -10,7 +10,7 @@ Open a registered application and choose its sign-in action. Gate verifies the c
 
 Open `/connections` at the operator-configured Gate origin to inspect and revoke browser devices or OAuth connections. Signing out a browser device invalidates its shared session across the suite. Independent devices and MCP OAuth connections remain active.
 
-MCP clients connect through standard OAuth authorization code with PKCE. Their approvals and Bearer credentials are separate from browser device sessions. Gate admits only the configured GitHub account and has no public signup, organizations, roles or selectable feature permissions.
+MCP clients dynamically register through OAuth DCR, then connect through authorization code with PKCE. Client registration does not authorize access: the configured person must sign in and approve the connection. Their approvals and Bearer credentials are separate from browser device sessions. Gate admits only the configured GitHub account and has no public signup, organizations, roles or selectable feature permissions.
 
 ## Documentation
 

@@ -18,7 +18,6 @@ The authoritative runtime validation is in [src/config.ts](../src/config.ts). [c
 | `GATE_GITHUB_CLIENT_SECRET` | GitHub OAuth App secret; supply through Secret Manager in production. |
 | `GATE_COOKIE_KEYS` | JSON array of independent random signing strings, each at least 32 characters. Persist across replicas and restarts. |
 | `GATE_JWKS` | Private signing JWKS. Provision a persistent RSA key of at least 2048 bits with stable `kid`, `use: "sig"` and `alg: "RS256"`. Never publish private components. |
-| `GATE_CLIENTS` | Nonempty JSON array of explicitly registered public OAuth clients. |
 | `GATE_BROWSER_APPS` | Nonempty JSON array of browser applications and exact HTTPS return URIs. |
 | `GATE_RESOURCES` | Nonempty private JSON array of resource audiences and introspection credentials. |
 
@@ -26,11 +25,13 @@ The complete configuration requires HTTPS, including local browser-session devel
 
 ## Registrations
 
-OAuth clients use `client_id`, `client_name` and `redirect_uris`. Redirects must be exact HTTPS URLs or HTTP loopback URLs. Wildcards are rejected. Clients use PKCE and do not receive a client secret.
+MCP clients use the advertised DCR registration endpoint. Supply `redirect_uris` and public-client metadata, not a preassigned client ID. Supported fields are `client_name`, `application_type`, `grant_types`, `response_types`, `redirect_uris` and `token_endpoint_auth_method`. The authentication method is `none`, response type is `code`, and grants include `authorization_code` with optional `refresh_token`. Missing application type is inferred from all-HTTPS web callbacks or all-HTTP-loopback native callbacks. Mixed classes, wildcards, credentials and fragments are rejected. Native loopback port matching is handled by the OAuth provider.
 
 ```json
-[{"client_id":"desktop","client_name":"Desktop","redirect_uris":["http://127.0.0.1:8080/callback"]}]
+{"client_name":"Desktop","redirect_uris":["http://127.0.0.1:8080/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}
 ```
+
+Registration is public, while access requires the configured person's authentication and explicit connection approval. Client names are unverified metadata. Remote key, sector and request metadata is rejected; inert extras are omitted. Input is limited to 8192 bytes, ten redirects of at most 2048 characters and a name of at most 100 characters. The shared Firestore quota permits 1000 registrations over a namespace lifetime and 20 per fixed minute. There is no client-management API or automatic capacity reset.
 
 Browser apps use an `app_id`, `app_name` and exact HTTPS `redirect_uris` under the cookie parent. These app IDs are distinct from OAuth client IDs and resource verification credentials. Gate derives allowed browser CORS origins from these return URLs.
 
@@ -44,7 +45,7 @@ Resources use a unique `audience`, `client_id`, `client_secret` of at least 32 c
 [{"audience":"https://api.example.test/mcp","client_id":"actions-api","client_secret":"replace-with-an-independent-random-secret","browser_client_id":"actions-browser"}]
 ```
 
-The receiving API must explicitly admit the Gate issuer/subject and permitted browser/MCP clients. Gate approval does not create application users, merge identities or grant database access automatically.
+The receiving API must explicitly admit an enabled Gate issuer/subject mapping; browser verification separately checks the configured browser client ID. Gate approval does not create application users, merge identities or grant database access automatically.
 
 ## GitHub callback and secrets
 
@@ -54,6 +55,6 @@ On Cloud Run, use the dedicated runtime identity and Application Default Credent
 
 ## Ignored deployment inputs
 
-Copy [infra/runtime-config.example.json](../infra/runtime-config.example.json) to `.local/gate-runtime.json`. It contains `issuer`, `sessionCookieDomain`, `githubUserId`, `clients`, `browserApps` and optional `browserSessionTtlSeconds`. The renderer supplies these nonsecret settings to the Cloud Run template; Firestore identifiers and secret references remain in the template. Resource registrations remain in the private `GATE_RESOURCES` secret.
+Copy [infra/runtime-config.example.json](../infra/runtime-config.example.json) to `.local/gate-runtime.json`. It contains `issuer`, `sessionCookieDomain`, `githubUserId`, `browserApps` and optional `browserSessionTtlSeconds`. The renderer supplies these nonsecret settings to the Cloud Run template; Firestore identifiers and secret references remain in the template. Resource registrations remain in the private `GATE_RESOURCES` secret.
 
 Do not commit actual endpoint values, account IDs, redirect registrations, rendered manifests or secrets. The renderer's output inside the repository must be under `.local/`. See [deployment](deployment.md) before applying it.

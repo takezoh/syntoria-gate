@@ -3,7 +3,6 @@ import { isIP } from 'node:net';
 export interface Config {
   issuer: string; firestoreProjectId: string; firestoreDatabaseId: string; githubClientId: string; githubClientSecret: string; githubUserId: string;
   cookieKeys: string[]; jwks: {keys:JWK[]}; port: number;
-  clients: {client_id:string; client_name:string; redirect_uris:string[]}[];
   resources: {audience:string; client_id:string; client_secret:string; browser_client_id:string}[];
   sessionCookieDomain: string;
   browserSessionTtlSeconds: number;
@@ -39,23 +38,17 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     (url.protocol!=='https:'&&!(env.NODE_ENV!=='production'&&url.protocol==='http:'&&['127.0.0.1','localhost'].includes(url.hostname)))) throw new Error('Invalid GATE_ISSUER');
   const sessionCookieDomain = dnsParent(required('GATE_SESSION_COOKIE_DOMAIN'));
   if (url.protocol !== 'https:' || url.hostname === sessionCookieDomain || !underParent(url.hostname, sessionCookieDomain)) throw new Error('Gate issuer must be a HTTPS subdomain of GATE_SESSION_COOKIE_DOMAIN');
-  const clients=JSON.parse(required('GATE_CLIENTS')) as Config['clients'];
   const resources=JSON.parse(required('GATE_RESOURCES')) as Config['resources'];
   const browserApps=JSON.parse(required('GATE_BROWSER_APPS')) as Config['browserApps'];
-  if(!Array.isArray(clients)||!clients.length||!Array.isArray(resources)||!resources.length||!Array.isArray(browserApps)||!browserApps.length) throw new Error('Configure clients, resources, and browser apps');
-  const ids=new Set<string>();
-  for(const client of clients) {
-    if(!client.client_id||ids.has(client.client_id)||!client.client_name||!Array.isArray(client.redirect_uris)||!client.redirect_uris.length) throw new Error('Invalid client');
-    ids.add(client.client_id);
-    for(const uri of client.redirect_uris) { const u=new URL(uri); if(uri.includes('*')||u.hash||u.username||u.password||(u.protocol!=='https:'&&!(u.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname)))) throw new Error('Exact HTTPS or loopback redirect required'); }
-  }
+  if(!Array.isArray(resources)||!resources.length||!Array.isArray(browserApps)||!browserApps.length) throw new Error('Configure resources and browser apps');
   const audiences=new Set<string>();
+  const resourceIds=new Set<string>();
   const browserClientIds=new Set<string>();
   for(const r of resources) {
     let audience: URL;
     try { audience=new URL(r.audience); } catch { throw new Error('Invalid resource'); }
-    if(audiences.has(r.audience)||audience.username||audience.password||audience.search||audience.hash||!r.client_id||ids.has(r.client_id)||typeof r.client_secret!=='string'||r.client_secret.length<32||audience.protocol!=='https:'||!underParent(audience.hostname,sessionCookieDomain)||!r.browser_client_id||typeof r.browser_client_id!=='string'||browserClientIds.has(r.browser_client_id)) throw new Error('Invalid resource');
-    ids.add(r.client_id);audiences.add(r.audience);browserClientIds.add(r.browser_client_id);
+    if(audiences.has(r.audience)||audience.username||audience.password||audience.search||audience.hash||!r.client_id||resourceIds.has(r.client_id)||typeof r.client_secret!=='string'||r.client_secret.length<32||audience.protocol!=='https:'||!underParent(audience.hostname,sessionCookieDomain)||!r.browser_client_id||typeof r.browser_client_id!=='string'||browserClientIds.has(r.browser_client_id)) throw new Error('Invalid resource');
+    resourceIds.add(r.client_id);audiences.add(r.audience);browserClientIds.add(r.browser_client_id);
   }
   const appIds=new Set<string>();
   const origins=new Set<string>();
@@ -83,5 +76,5 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const firestoreProjectId=required('GATE_FIRESTORE_PROJECT_ID');
   const firestoreDatabaseId=required('GATE_FIRESTORE_DATABASE_ID');
   if(!/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(firestoreProjectId)||!(firestoreDatabaseId==='(default)'||/^[a-z][a-z0-9-]{2,61}[a-z0-9]$/.test(firestoreDatabaseId)))throw new Error('Invalid Firestore project or database');
-  return {issuer,firestoreProjectId,firestoreDatabaseId,githubClientId:required('GATE_GITHUB_CLIENT_ID'),githubClientSecret:required('GATE_GITHUB_CLIENT_SECRET'),githubUserId,cookieKeys,jwks,clients,resources,sessionCookieDomain,browserSessionTtlSeconds,browserApps,browserOrigins:Object.freeze([...origins]),port};
+  return {issuer,firestoreProjectId,firestoreDatabaseId,githubClientId:required('GATE_GITHUB_CLIENT_ID'),githubClientSecret:required('GATE_GITHUB_CLIENT_SECRET'),githubUserId,cookieKeys,jwks,resources,sessionCookieDomain,browserSessionTtlSeconds,browserApps,browserOrigins:Object.freeze([...origins]),port};
 }

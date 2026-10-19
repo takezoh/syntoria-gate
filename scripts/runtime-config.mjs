@@ -17,27 +17,15 @@ function parseUrl(value, protocol, canonical = true) {
 }
 function underParent(host, parent) { return host.toLowerCase() === parent || host.toLowerCase().endsWith(`.${parent}`); }
 function exactString(value) { return typeof value === 'string' && value.trim() === value && value.length > 0; }
+const RUNTIME_CONFIG_KEYS = new Set(['issuer', 'sessionCookieDomain', 'githubUserId', 'browserApps', 'browserSessionTtlSeconds']);
 
 export function parseRuntimeConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail();
+  if (Object.keys(input).some(key => !RUNTIME_CONFIG_KEYS.has(key))) fail();
   const cookieDomain = dnsParent(input.sessionCookieDomain);
   const issuer = parseUrl(input.issuer, 'https:', false);
   if (issuer.search || issuer.pathname !== '/' || issuer.href.slice(0, -1) !== input.issuer || issuer.hostname === cookieDomain || !underParent(issuer.hostname, cookieDomain)) fail();
   if (typeof input.githubUserId !== 'string' || !/^[1-9][0-9]*$/u.test(input.githubUserId)) fail();
-
-  if (!Array.isArray(input.clients) || input.clients.length === 0) fail();
-  const clientIds = new Set();
-  for (const client of input.clients) {
-    if (!client || !exactString(client.client_id) || clientIds.has(client.client_id) || !exactString(client.client_name) || !Array.isArray(client.redirect_uris) || client.redirect_uris.length === 0) fail();
-    clientIds.add(client.client_id);
-    for (const redirect of client.redirect_uris) {
-      if (!exactString(redirect) || redirect.includes('*')) fail();
-      let target;
-      try { target = new URL(redirect); } catch { fail(); }
-      const loopback = target.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname);
-      if (target.username || target.password || target.hash || (target.protocol !== 'https:' && !loopback)) fail();
-    }
-  }
 
   if (!Array.isArray(input.browserApps) || input.browserApps.length === 0) fail();
   const appIds = new Set();
@@ -58,7 +46,6 @@ export function parseRuntimeConfig(input) {
     issuer: input.issuer,
     sessionCookieDomain: cookieDomain,
     githubUserId: input.githubUserId,
-    clients: input.clients,
     browserApps: input.browserApps,
     browserSessionTtlSeconds: ttl,
     browserOrigins: Object.freeze([...origins]),

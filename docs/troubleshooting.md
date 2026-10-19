@@ -12,7 +12,7 @@ This is not the SPA's `/auth-return.html` URL or the MCP client's loopback callb
 
 GitHub identity login and full-access connection approval are distinct. A new browser device needs approval; an already approved active device can reuse its session across registered applications. A separate MCP OAuth connection needs its own grant. A copied approval URL cannot replace the initiating browser's bound cookies and identity.
 
-Check the exact registered app ID and return URI, shared cookie parent, HTTPS trust, cookie flags and expiry. Confirm that the API uses the same Gate issuer and resource audience and explicitly admits the verified subject and browser/MCP client. A successful Gate login does not create an application user mapping.
+Check the exact registered app ID and return URI, shared cookie parent, HTTPS trust, cookie flags and expiry. Confirm that the API uses the same Gate issuer and resource audience and explicitly admits the verified issuer/subject and validates its configured browser client separately. A successful Gate login does not create an application user mapping.
 
 For repeated approval prompts, inspect whether the shared cookie is actually sent and whether the session is expired or revoked. An identity cookie alone does not authorize an API. Return to the application's sign-in action rather than refreshing a consumed approval transaction.
 
@@ -20,7 +20,7 @@ For repeated approval prompts, inspect whether the shared cookie is actually sen
 
 | Symptom | Check |
 | --- | --- |
-| 401 | Session/Bearer credential is present, unexpired and not revoked; allowed client identity matches; no duplicate or ambiguous credentials |
+| 401 | Session/Bearer credential is present, unexpired and not revoked; browser client matches when applicable and OAuth client identity is consistent; no duplicate or ambiguous credentials |
 | 403 | Exact registered Origin, required CSRF token, audience and application-local user admission |
 | 503 | Gate and Firestore readiness, resource credentials, introspection response validity and network timeout |
 
@@ -39,3 +39,9 @@ Google-managed certificates usually take about 15 minutes and can take up to 24 
 Use `/connections` or browser logout to revoke access. Do not delete connection guard records to clean up expired tokens: durable revocation guards prevent delayed writes from reviving credentials. TTL is appropriate only for expiring artifacts, identity sessions, login attempts, approvals and browser sessions.
 
 For storage failures, verify the exact Firestore project/database and runtime identity's database-scoped IAM, then check `/readyz`. Do not point a local test at production or reset the database as a troubleshooting step. See [deployment and recovery](deployment.md).
+
+## Dynamic client registration
+
+Read the configured issuer's discovery metadata and use its `registration_endpoint`. Clients must use DCR and public authorization-code PKCE. An invalid callback error requires checking the callback sent in that client's DCR request and authorization request; no operator-maintained public callback list exists.
+
+HTTP 429 means the namespace registration rate or lifetime quota is exhausted: 20 registrations per fixed minute and 1000 lifetime registrations. Waiting can resolve the minute rate; lifetime exhaustion requires reviewed operator intervention. No background reset or public client-management endpoint is provided. Preserve active clients, connection revocation guards and quota consistency; do not reset Firestore as a shortcut. Existing approved clients do not register again for token refresh. These quotas do not constitute a general request-rate or spending cap.

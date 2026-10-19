@@ -8,16 +8,39 @@ export interface BrowserSession { userId: string; connectionId: string; csrf: st
 export interface LoginState { binding: string; interaction?: string }
 export interface BrowserLoginAttempt { appId: string; appName: string; redirectUri: string; deviceLabel: string; stateHash: string; bindingHash: string; createdAt: Timestamp; expiresAt: Timestamp }
 export interface BrowserApproval { appId: string; appName: string; redirectUri: string; bindingHash: string; userId: string; csrf: string; deviceLabel: string; createdAt: Timestamp; expiresAt: Timestamp }
-export interface Connection { id: string; userId: string; clientId: string; createdAt: string; revoked: boolean; kind?: 'browser' | 'oauth'; subject?: string; approved?: boolean; deviceLabel?: string }
+export interface Connection { id: string; userId: string; clientId: string; clientName?: string; createdAt: string; revoked: boolean; kind?: 'browser' | 'oauth'; subject?: string; approved?: boolean; deviceLabel?: string }
 export interface IssuedBrowserSession { redirectUri: string; connectionId: string }
+export interface RegistrationLimits { total: number; perMinute: number }
+
+export const DEFAULT_REGISTRATION_LIMITS: Readonly<RegistrationLimits> = Object.freeze({ total: 1_000, perMinute: 20 });
+
+export class RegistrationLimitError extends Error {
+  readonly statusCode = 429;
+  readonly message = 'temporarily_unavailable';
+  readonly expose = true;
+  readonly error_description: string;
+  constructor(limit: 'capacity' | 'rate') {
+    super('Client registration limit reached');
+    this.name = 'RegistrationLimitError';
+    this.error_description = limit === 'capacity' ? 'Client registration capacity reached' : 'Client registration rate limit reached';
+  }
+}
+
+class RegistrationUnavailableError extends Error {
+  readonly statusCode = 503;
+  readonly message = 'server_error';
+  readonly expose = false;
+  constructor() { super('Client registration storage unavailable'); this.name = 'RegistrationUnavailableError'; }
+}
 
 function activeTimestamp(value: unknown, now: number): value is Timestamp {
   return value instanceof Timestamp && value.toMillis() > now;
 }
 
 export class Storage {
-  constructor(readonly db: Firestore, private namespace = 'gate', private now: () => number = Date.now) {
+  constructor(readonly db: Firestore, private namespace = 'gate', private now: () => number = Date.now, private registrationLimits: Readonly<RegistrationLimits> = DEFAULT_REGISTRATION_LIMITS) {
     if (!/^[a-zA-Z0-9_-]+$/.test(namespace)) throw new Error('Invalid collection namespace');
+    if (!Number.isSafeInteger(registrationLimits.total) || registrationLimits.total < 1 || !Number.isSafeInteger(registrationLimits.perMinute) || registrationLimits.perMinute < 1) throw new Error('Invalid registration limits');
   }
   async ready() {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -34,24 +57,70 @@ export class Storage {
   private browserLoginAttempts() { return this.db.collection(`${this.namespace}_browser_login_attempts`); }
   private browserApprovals() { return this.db.collection(`${this.namespace}_browser_approvals`); }
   private identitySessions() { return this.db.collection(`${this.namespace}_identity_sessions`); }
+  private registrationQuota() { return this.db.collection(`${this.namespace}_dcr_state`).doc('quota'); }
+  private registrationRate() { return this.db.collection(`${this.namespace}_dcr_state`).doc('rate'); }
   private grantId(model: string, id: string, payload: AdapterPayload) { return model === 'Grant' ? id : payload.grantId; }
-  private async active(tx: Transaction, grantId?: string) {
-    return !grantId || !(await tx.get(this.connection(grantId))).get('revoked');
+  private async active(tx: Transaction, grantId?: string, allowMissing = false) {
+    if (!grantId) return true;
+    const snapshot = await tx.get(this.connection(grantId));
+    if (!snapshot.exists) return allowMissing;
+    return snapshot.get('kind') === 'oauth' && snapshot.get('approved') === true && snapshot.get('revoked') !== true;
   }
-  async upsert(model: string, id: string, payload: AdapterPayload, expiresIn: number) {
+  private async upsertClient(id: string, payload: AdapterPayload) {
+    const ref = this.artifacts('Client').doc(key(id));
+    const quotaRef = this.registrationQuota();
+    const rateRef = this.registrationRate();
+    const now = this.now();
+    try {
+      await this.db.runTransaction(async tx => {
+        const [previous, quota, rate] = await Promise.all([tx.get(ref), tx.get(quotaRef), tx.get(rateRef)]);
+        if (previous.exists) {
+          if (JSON.stringify(previous.get('payload')) !== JSON.stringify(payload)) throw new Error('Dynamic client metadata is immutable');
+          return;
+        }
+        const total = quota.get('total') ?? 0;
+        const currentWindow = Math.floor(this.now() / 60_000);
+        const storedWindow: unknown = rate.get('window');
+        const storedRequests: unknown = rate.get('requests');
+        if (storedWindow !== undefined && (!Number.isSafeInteger(storedWindow) || (storedWindow as number) < 0)) throw new Error('Invalid registration counters');
+        if (storedRequests !== undefined && (!Number.isSafeInteger(storedRequests) || (storedRequests as number) < 0)) throw new Error('Invalid registration counters');
+        const window = storedWindow === undefined ? currentWindow : Math.max(storedWindow as number, currentWindow);
+        const requests = storedWindow === window ? storedRequests ?? 0 : 0;
+        if (!Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(currentWindow) || currentWindow < 0 || !Number.isSafeInteger(window)) throw new Error('Invalid registration counters');
+        if (total >= this.registrationLimits.total) throw new RegistrationLimitError('capacity');
+        if ((requests as number) >= this.registrationLimits.perMinute) throw new RegistrationLimitError('rate');
+        tx.create(ref, { id, payload, createdAt: Timestamp.fromMillis(now) });
+        tx.set(quotaRef, { total: total + 1 });
+        tx.set(rateRef, { window, requests: (requests as number) + 1 });
+      });
+    } catch (error) {
+      if (error instanceof RegistrationLimitError) throw error;
+      throw new RegistrationUnavailableError();
+    }
+  }
+  async hasActiveOAuthConnection(id: string, userId: string, clientId: string) {
+    const connection = await this.connection(id).get();
+    return connection.exists && connection.get('kind') === 'oauth' && connection.get('approved') === true && connection.get('revoked') !== true && connection.get('userId') === userId && connection.get('clientId') === clientId;
+  }
+  async upsert(model: string, id: string, payload: AdapterPayload, expiresIn?: number) {
+    if (model === 'Client') {
+      await this.upsertClient(id, payload);
+      return;
+    }
     const ref = this.artifacts(model).doc(key(id));
     await this.db.runTransaction(async tx => {
       const previous = await tx.get(ref);
-      if (!await this.active(tx, this.grantId(model, id, payload))) throw new Error('Grant revoked');
+      if (!await this.active(tx, this.grantId(model, id, payload), model === 'Grant')) throw new Error('Grant missing or revoked');
       const consumed = previous.get('payload.consumed');
-      tx.set(ref, { id, payload: { ...payload, ...(consumed === undefined ? {} : { consumed }) }, expiresAt: Timestamp.fromMillis(this.now() + expiresIn * 1000) });
+      tx.set(ref, { id, payload: { ...payload, ...(consumed === undefined ? {} : { consumed }) }, expiresAt: Timestamp.fromMillis(this.now() + expiresIn! * 1000) });
     });
   }
   private async read(tx: Transaction, ref: DocumentReference) {
     const document = await tx.get(ref);
-    if (!document.exists || !activeTimestamp(document.get('expiresAt'), this.now())) return undefined;
-    const payload = document.get('payload') as AdapterPayload;
+    if (!document.exists) return undefined;
     const model = document.ref.parent.parent!.id;
+    if (model !== key('Client') && !activeTimestamp(document.get('expiresAt'), this.now())) return undefined;
+    const payload = document.get('payload') as AdapterPayload;
     const grantId = model === key('Grant') ? document.get('id') as string : payload.grantId;
     return await this.active(tx, grantId) ? payload : undefined;
   }
@@ -74,12 +143,12 @@ export class Storage {
     if (model === 'Grant') return this.revoke(id);
     await this.artifacts(model).doc(key(id)).delete();
   }
-  async addConnection(id: string, userId: string, clientId: string) {
+  async addConnection(id: string, userId: string, clientId: string, clientName?: string) {
     await this.db.runTransaction(async tx => {
       const ref = this.connection(id);
       const previous = await tx.get(ref);
       if (previous.exists) throw new Error('Connection already exists');
-      tx.create(ref, { id, userId, clientId, subject: userId, kind: 'oauth', approved: true, createdAt: new Date(this.now()).toISOString(), revoked: false });
+      tx.create(ref, { id, userId, clientId, ...(clientName ? { clientName } : {}), subject: userId, kind: 'oauth', approved: true, createdAt: new Date(this.now()).toISOString(), revoked: false });
     });
   }
   async listConnections(userId: string): Promise<Connection[]> {

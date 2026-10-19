@@ -5,11 +5,11 @@ import { createGateVerifier, GateError, protectedResourceMetadata } from '../pac
 
 const issuer = 'https://gate.example/realms/syntoria';
 const endpoint = `${issuer}/protocol/openid-connect/token/introspect`;
-const config = { issuer, audience: 'https://weave.example', clientId: 'resource', clientSecret: 'secret', allowedClientIds: ['desktop'] };
+const config = { issuer, audience: 'https://weave.example', clientId: 'resource', clientSecret: 'secret', browserClientId: 'weave-browser' };
 const clock = 1_700_000_000_000;
 const sessionEndpoint = `${issuer}/browser/session/introspect`;
 const sessionSecret = randomBytes(32).toString('base64url');
-const active = (extra = {}) => ({ active: true, token_type: 'Bearer', gate_approved: true, iss: issuer, sub: 'person-a', connection_id: 'connection-a', client_id: 'desktop', aud: config.audience, exp: clock / 1000 + 60, ...extra });
+const active = (extra = {}) => ({ active: true, token_type: 'Bearer', gate_approved: true, iss: issuer, sub: 'person-a', connection_id: 'connection-a', client_id: 'dcr-public-client', azp: 'dcr-public-client', aud: config.audience, exp: clock / 1000 + 60, ...extra });
 const json = (data, options = {}) => new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' }, ...options });
 function fixture(result = active(), options = {}) {
   const calls = [];
@@ -22,7 +22,7 @@ function fixture(result = active(), options = {}) {
 }
 const status = (expected) => error => error instanceof GateError && error.status === expected;
 
-const browserActive = (extra = {}) => ({active:true,iss:issuer,sub:'person-a',connection_id:'browser-connection-a',client_id:'desktop',aud:config.audience,exp:clock/1000+60,gate_approved:true,session_type:'browser',csrf_token:randomBytes(32).toString('base64url'),...extra});
+const browserActive = (extra = {}) => ({active:true,iss:issuer,sub:'person-a',connection_id:'browser-connection-a',client_id:config.browserClientId,aud:config.audience,exp:clock/1000+60,gate_approved:true,session_type:'browser',csrf_token:randomBytes(32).toString('base64url'),...extra});
 function sessionFixture(result = browserActive(), options = {}) {
   const calls=[];
   const fetch=async (url,init)=>{
@@ -38,7 +38,7 @@ test('browser session introspection is fresh, resource-bound and returns a froze
   const data=browserActive();
   const {calls,verifier}=sessionFixture(()=>json(inactive?{active:false}:data));
   const principal=await verifier.verifySession(sessionSecret);
-  assert.deepEqual(principal,{issuer,userId:'person-a',connectionId:'browser-connection-a',clientId:'desktop',expiresAt:data.exp,csrfToken:data.csrf_token,sessionType:'browser'});
+  assert.deepEqual(principal,{issuer,userId:'person-a',connectionId:'browser-connection-a',clientId:config.browserClientId,expiresAt:data.exp,csrfToken:data.csrf_token,sessionType:'browser'});
   assert.ok(Object.isFrozen(principal));
   assert.equal(calls[0].url,sessionEndpoint);
   assert.equal(calls[0].init.method,'POST');
@@ -57,7 +57,7 @@ for(const [name,change] of Object.entries({
   'wrong issuer':{iss:'https://other.example'},
   'wrong audience':{aud:'https://other.example'},
   'array audience':{aud:[config.audience]},
-  'unapproved resource client':{client_id:'resource'},
+  'wrong browser client':{client_id:'dcr-public-client'},
   'missing subject':{sub:undefined},
   'missing connection':{connection_id:undefined},
   'missing CSRF token':{csrf_token:undefined},
@@ -95,7 +95,7 @@ test('fresh native introspection on every request, including immediate revoke', 
   let revoked = false;
   const { verifier, calls } = fixture(() => json(revoked ? { active: false } : active()));
   const principal = await verifier.authenticate('Bearer some.token');
-  assert.deepEqual(principal, { issuer, userId: 'person-a', connectionId: 'connection-a', clientId: 'desktop' });
+  assert.deepEqual(principal, { issuer, userId: 'person-a', connectionId: 'connection-a', clientId: 'dcr-public-client' });
   assert.ok(Object.isFrozen(principal));
   await verifier.verifyToken('some.token');
   revoked = true;
@@ -123,7 +123,7 @@ test('introspection Basic credentials use OAuth form encoding', async () => {
 for (const [name, change] of Object.entries({
   inactive: { active: false }, 'missing approval': { gate_approved: undefined }, 'string approval': { gate_approved: 'true' }, 'foreign issuer': { iss: 'https://evil.example' }, 'missing subject': { sub: undefined },
   'missing connection': { connection_id: undefined }, 'expired token': { exp: clock / 1000 }, 'string expiry': { exp: '9999999999' },
-  'wrong client': { client_id: 'unapproved-app' }, 'inconsistent client': { azp: 'other-app' },
+  'missing client id': { client_id: undefined }, 'inconsistent client': { azp: 'other-app' }, 'empty authorized party': { azp: '' },
   'missing audience': { aud: undefined }, 'foreign audience': { aud: ['other'] }, 'malformed audience': { aud: [config.audience, 1] },
 })) {
   test(`rejects ${name}`, async () => {
@@ -131,9 +131,14 @@ for (const [name, change] of Object.entries({
   });
 }
 
-test('supports azp identity and multi-audience tokens without scopes or roles', async () => {
-  const { verifier } = fixture(active({ client_id: undefined, azp: 'desktop', aud: ['other', config.audience] }));
-  assert.equal((await verifier.verifyToken('token')).clientId, 'desktop');
+test('accepts dynamic client IDs with consistent client_id and azp across audiences', async () => {
+  const { verifier } = fixture(active({ client_id: 'new-dcr-client', azp: 'new-dcr-client', aud: ['other', config.audience] }));
+  assert.equal((await verifier.verifyToken('token')).clientId, 'new-dcr-client');
+});
+
+test('accepts standard client_id when optional azp is absent', async () => {
+  const { verifier } = fixture(active({ client_id: 'new-dcr-client', azp: undefined }));
+  assert.equal((await verifier.verifyToken('token')).clientId, 'new-dcr-client');
 });
 
 test('malformed credentials fail before any network call', async () => {
@@ -203,6 +208,7 @@ test('one deadline bounds discovery and introspection even for noncompliant fetc
 });
 
 test('HTTPS configuration and explicit isolated loopback exception', () => {
+  assert.throws(() => createGateVerifier({ ...config, browserClientId: undefined }));
   for (const issuer of ['http://gate.example', 'https://user:pass@gate.example', 'https://gate.example?x=1', 'https://gate.example/#x']) {
     assert.throws(() => createGateVerifier({ ...config, issuer }));
   }

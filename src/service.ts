@@ -4,6 +4,7 @@ import { Provider, interactionPolicy, type Configuration } from 'oidc-provider';
 import type { Storage } from './storage.js';
 import type { Config } from './config.js';
 import { adapter } from './storage.js';
+import { InvalidDcrMetadataError, parseDcrMetadata, REGISTRATION_BODY_LIMIT } from './registration.js';
 
 const random=()=>randomBytes(32).toString('base64url');
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
@@ -90,14 +91,12 @@ async function jsonBody(req:IncomingMessage) {
   return value as Record<string,unknown>;
 }
 
-function registeredRedirectOrigin(config:Config,clientId:unknown,redirectUri:unknown) {
-  if(typeof clientId!=='string'||typeof redirectUri!=='string')return undefined;
-  const client=config.clients.find(c=>c.client_id===clientId);
-  if(!client?.redirect_uris.includes(redirectUri)||redirectUri.includes('*'))return undefined;
+function registeredRedirectOrigin(client:{redirectUriAllowed(redirectUri:string):boolean}|undefined,redirectUri:unknown) {
+  if(!client||typeof redirectUri!=='string'||redirectUri.includes('*')||!client.redirectUriAllowed(redirectUri))return undefined;
   try {
     const target=new URL(redirectUri);
     const loopback=target.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(target.hostname);
-    if(target.username||target.password||target.hash||(target.protocol!=='https:'&&!loopback))return undefined;
+    if(target.href!==redirectUri||target.username||target.password||target.hash||redirectUri.includes('#')||(target.protocol!=='https:'&&!loopback))return undefined;
     return target.origin;
   } catch { return undefined; }
 }
@@ -167,20 +166,54 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
   policy.get('consent')!.checks.add(new interactionPolicy.Check('connection_approval','Approve a new connection',ctx=>!ctx.oidc.result?.consent?.grantId));
   let provider:Provider;
   const settings:Configuration={
-    adapter:adapter(storage), clients:[...config.clients.map(c=>({...c,token_endpoint_auth_method:'none' as const,grant_types:['authorization_code','refresh_token'],response_types:['code' as const]})),...config.resources.map(r=>({client_id:r.client_id,client_secret:r.client_secret,grant_types:[],response_types:[],redirect_uris:[],token_endpoint_auth_method:'client_secret_basic' as const}))],
+    adapter:adapter(storage), clients:config.resources.map(r=>({client_id:r.client_id,client_secret:r.client_secret,grant_types:[],response_types:[],redirect_uris:[],token_endpoint_auth_method:'client_secret_basic' as const})),
     jwks:config.jwks,cookies:{keys:config.cookieKeys},claims:{openid:['sub']},scopes:['openid'],
     responseTypes:['code'],pkce:{required:()=>true},
-    features:{devInteractions:{enabled:false},revocation:{enabled:true},introspection:{enabled:true,allowedPolicy:(_ctx,client,token)=>token.kind==='AccessToken'&&config.resources.some(r=>r.client_id===client.clientId&&r.audience===token.aud)},resourceIndicators:{enabled:true,defaultResource:()=>config.resources[0]!.audience,useGrantedResource:()=>true,getResourceServerInfo:(_ctx,resource)=>{const r=config.resources.find(r=>r.audience===resource);if(!r)throw new Error('Unknown resource');return {scope:'',audience:r.audience,accessTokenFormat:'opaque'};}}},
+    features:{devInteractions:{enabled:false},registration:{enabled:true,initialAccessToken:false,issueRegistrationAccessToken:false},registrationManagement:{enabled:false},clientIdMetadataDocument:{enabled:false},revocation:{enabled:true},introspection:{enabled:true,allowedPolicy:async(_ctx,client,token)=>{
+      if(token.kind!=='AccessToken'||typeof token.grantId!=='string'||typeof token.accountId!=='string'||typeof token.clientId!=='string')return false;
+      const resource=config.resources.find(r=>r.client_id===client.clientId&&r.audience===token.aud);
+      if(!resource)return false;
+      const registered=await provider.Client.find(token.clientId);
+      if(!registered||registered.tokenEndpointAuthMethod!=='none'||!registered.grantTypeAllowed('authorization_code'))return false;
+      return storage.hasActiveOAuthConnection(token.grantId,token.accountId,token.clientId);
+    }},resourceIndicators:{enabled:true,defaultResource:()=>config.resources[0]!.audience,useGrantedResource:()=>true,getResourceServerInfo:(_ctx,resource)=>{const r=config.resources.find(r=>r.audience===resource);if(!r)throw new Error('Unknown resource');return {scope:'',audience:r.audience,accessTokenFormat:'opaque'};}}},
     interactions:{policy,url:(_ctx,interaction)=>`/interaction/${interaction.uid}`},
     findAccount:(_ctx,id)=>id===accountId?{accountId:id,claims:async()=>({sub:id})}:undefined,
     loadExistingGrant:async ctx=>{const id=ctx.oidc.result?.consent?.grantId;return id?provider.Grant.find(id):undefined;},
     expiresWithSession:()=>false,
     issueRefreshToken:(_ctx,client)=>client.grantTypeAllowed('refresh_token'),
-    extraTokenClaims:(_ctx,token)=>({connection_id:'grantId' in token?token.grantId:undefined,gate_approved:true}),
+    extraTokenClaims:(_ctx,token)=>({connection_id:'grantId' in token?token.grantId:undefined,azp:token.clientId,gate_approved:true}),
     ttl:{AccessToken:300,IdToken:300,AuthorizationCode:60,Grant:30*86400,RefreshToken:30*86400,Session:86400,Interaction:600},
   };
   provider=new Provider(config.issuer,settings);
   provider.proxy=config.issuer.startsWith('https:');
+  provider.use(async(ctx,next)=>{
+    if(ctx.method!=='POST'||ctx.path!=='/reg')return next();
+    const contentType=ctx.get('content-type');
+    if(!/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(contentType)) {
+      ctx.status=400;ctx.set('cache-control','no-store');ctx.body={error:'invalid_client_metadata'};return;
+    }
+    const declaredLength=ctx.get('content-length');
+    if(declaredLength&&(!/^\d+$/u.test(declaredLength)||Number(declaredLength)>REGISTRATION_BODY_LIMIT)) {
+      ctx.status=413;ctx.set('cache-control','no-store');ctx.body={error:'invalid_client_metadata'};return;
+    }
+    const chunks:Buffer[]=[];let size=0;
+    try {
+      for await(const chunk of ctx.req) {
+        const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);size+=bytes.length;
+        if(size>REGISTRATION_BODY_LIMIT) {ctx.status=413;ctx.set('cache-control','no-store');ctx.body={error:'invalid_client_metadata'};return;}
+        chunks.push(bytes);
+      }
+      const metadata=parseDcrMetadata(Buffer.concat(chunks));
+      (ctx.req as IncomingMessage&{body?:unknown}).body=metadata;
+      (ctx.request as typeof ctx.request&{body?:unknown}).body=metadata;
+      Object.defineProperty(ctx.req,'readable',{configurable:true,value:false});
+    } catch(error) {
+      if(!(error instanceof InvalidDcrMetadataError))throw error;
+      ctx.status=400;ctx.set('cache-control','no-store');ctx.body={error:'invalid_client_metadata'};return;
+    }
+    await next();
+  });
 
   async function currentIdentity(req:IncomingMessage) {
     const value=cookie(req,IDENTITY_COOKIE);
@@ -356,7 +389,7 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
         authCookies(req);
         const s=await currentIdentity(req);if(!s){res.writeHead(303,{location:'/login','cache-control':'no-store'});res.end();return;}
         const rows=await storage.listConnections(accountId);
-        page(res,'Connections',rows.map(r=>`<p>${escape(r.kind==='browser'?(r.deviceLabel??'This browser'):config.clients.find(c=>c.client_id===r.clientId)?.client_name??r.clientId)} — ${escape(r.createdAt)}</p><form method="post" action="/connections/revoke"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><input type="hidden" name="id" value="${escape(r.id)}"><button>Revoke connection</button></form>`).join('')||'<p>No connections.</p>');return;
+        page(res,'Connections',rows.map(r=>`<p>${escape(r.kind==='browser'?(r.deviceLabel??'This browser'):`Unverified OAuth client: ${r.clientName??r.clientId}`)} — ${escape(r.createdAt)}</p><form method="post" action="/connections/revoke"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><input type="hidden" name="id" value="${escape(r.id)}"><button>Revoke connection</button></form>`).join('')||'<p>No connections.</p>');return;
       }
       if(path==='/connections/revoke'&&req.method==='POST') {
         const origin=oneHeader(req,'origin'),cookies=authCookies(req),s=cookies.identity?await storage.identity(cookies.identity):undefined,bodyValues=await form(req);
@@ -380,18 +413,28 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
         authCookies(req);
         const s=await currentIdentity(req);if(!s||s.userId!==details.session?.accountId){res.writeHead(403);res.end('Sign in again');return;}
         if(req.method==='GET') {
-          const redirectOrigin=registeredRedirectOrigin(config,details.params.client_id,details.params.redirect_uri);
-          page(res,'Approve connection',`<p>${escape(config.clients.find(c=>c.client_id===details.params.client_id)?.client_name??String(details.params.client_id))} will have full access to this resource.</p><form method="post"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></form>`,redirectOrigin);return;
+          const clientId=details.params.client_id;
+          if(typeof clientId!=='string')throw new HttpFailure(403);
+          const client=await provider.Client.find(clientId);
+          const redirectUri=details.params.redirect_uri;
+          const redirectOrigin=registeredRedirectOrigin(client,redirectUri);
+          if(!client||client.tokenEndpointAuthMethod!=='none'||!client.grantTypeAllowed('authorization_code')||!redirectOrigin||typeof redirectUri!=='string')throw new HttpFailure(403);
+          const name=client.clientName??'No name supplied';
+          page(res,'Approve connection',`<p>Unverified client name: ${escape(name)}</p><p>Redirect URI: <code>${escape(redirectUri)}</code></p><p>Approving gives this client access to the registered Gate resources.</p><form method="post"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></form>`,redirectOrigin);return;
         }
         if(req.method==='POST') {
           const values=await form(req);
           if(values.getAll('decision').length!==1||values.getAll('csrf').length!==1||[...values.keys()].some(key=>!['decision','csrf'].includes(key))||oneHeader(req,'origin')!==config.issuer||!equal(s.csrf,values.get('csrf')??'')){res.writeHead(403);res.end();return;}
           if(values.get('decision')!=='approve'&&values.get('decision')!=='deny')throw new HttpFailure(400);
           if(values.get('decision')==='deny'){await provider.interactionFinished(req,res,{error:'access_denied'},{mergeWithLastSubmission:false});return;}
-          const grant=new provider.Grant({accountId,clientId:String(details.params.client_id)});grant.addOIDCScope('openid');
+          const clientId=details.params.client_id;
+          if(typeof clientId!=='string')throw new HttpFailure(403);
+          const client=await provider.Client.find(clientId);
+          if(!client||client.tokenEndpointAuthMethod!=='none'||!client.grantTypeAllowed('authorization_code')||!registeredRedirectOrigin(client,details.params.redirect_uri))throw new HttpFailure(403);
+          const grant=new provider.Grant({accountId,clientId});grant.addOIDCScope('openid');
           for(const r of config.resources)grant.addResourceScope(r.audience,'');
           const grantId=await grant.save();
-          await storage.addConnection(grantId,accountId,String(details.params.client_id));
+          await storage.addConnection(grantId,accountId,clientId,client.clientName);
           await provider.interactionFinished(req,res,{consent:{grantId}},{mergeWithLastSubmission:true});return;
         }
       }

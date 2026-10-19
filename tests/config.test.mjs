@@ -1,9 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readConfig} from '../dist/config.js';
-const env={NODE_ENV:'production',GATE_FIRESTORE_PROJECT_ID:'demo-gate-test',GATE_FIRESTORE_DATABASE_ID:'(default)',GATE_ISSUER:'https://gate.example.test',GATE_SESSION_COOKIE_DOMAIN:'example.test',GATE_BROWSER_SESSION_TTL_SECONDS:'2592000',GATE_BROWSER_APPS:JSON.stringify([{app_id:'action-tools',app_name:'Actions',redirect_uris:['https://actions.example.test/auth-return.html']}]),GATE_GITHUB_CLIENT_ID:'client',GATE_GITHUB_CLIENT_SECRET:'secret',GATE_GITHUB_USER_ID:'123',GATE_COOKIE_KEYS:JSON.stringify(['a'.repeat(32)]),GATE_JWKS:JSON.stringify({keys:[{kty:'RSA',d:'private'}]}),GATE_CLIENTS:JSON.stringify([{client_id:'desktop',client_name:'Desktop',redirect_uris:['http://127.0.0.1:8000/callback']}]),GATE_RESOURCES:JSON.stringify([{client_id:'weave-api',client_secret:'x'.repeat(32),audience:'https://api.example.test/mcp',browser_client_id:'weave-browser'}])};
+const env={NODE_ENV:'production',GATE_FIRESTORE_PROJECT_ID:'demo-gate-test',GATE_FIRESTORE_DATABASE_ID:'(default)',GATE_ISSUER:'https://gate.example.test',GATE_SESSION_COOKIE_DOMAIN:'example.test',GATE_BROWSER_SESSION_TTL_SECONDS:'2592000',GATE_BROWSER_APPS:JSON.stringify([{app_id:'action-tools',app_name:'Actions',redirect_uris:['https://actions.example.test/auth-return.html']}]),GATE_GITHUB_CLIENT_ID:'client',GATE_GITHUB_CLIENT_SECRET:'secret',GATE_GITHUB_USER_ID:'123',GATE_COOKIE_KEYS:JSON.stringify(['a'.repeat(32)]),GATE_JWKS:JSON.stringify({keys:[{kty:'RSA',d:'private'}]}),GATE_RESOURCES:JSON.stringify([{client_id:'weave-api',client_secret:'x'.repeat(32),audience:'https://api.example.test/mcp',browser_client_id:'weave-browser'}])};
 test('personal configuration validates issuer cookie scope, browser redirects, TTL and resource grants',()=>{
  const config=readConfig(env);
+ assert.equal('clients' in config,false);
  assert.equal(config.githubUserId,'123');
  assert.equal(config.sessionCookieDomain,'example.test');
  assert.equal(config.browserSessionTtlSeconds,2592000);
@@ -17,7 +18,6 @@ test('personal configuration validates issuer cookie scope, browser redirects, T
  {GATE_BROWSER_APPS:JSON.stringify([{app_id:'action-tools',app_name:'Actions',redirect_uris:['https://actions.example.test\\auth-return.html']}])},
  {GATE_BROWSER_APPS:JSON.stringify([{app_id:'action-tools',app_name:'Actions',redirect_uris:['https://actions.example.test/callback#fragment']}])},
  {GATE_BROWSER_APPS:JSON.stringify([{app_id:'action-tools',app_name:'Actions',redirect_uris:['https://outside.test/callback']}])},
- {GATE_CLIENTS:JSON.stringify([{client_id:'desktop',client_name:'Desktop',redirect_uris:['https://app.example/*']}])},
  {GATE_RESOURCES:JSON.stringify([{client_id:'weave',client_secret:'x'.repeat(32),audience:'https://user:secret@weave.example'}])},
  {GATE_RESOURCES:JSON.stringify([{client_id:'desktop',client_secret:'x'.repeat(32),audience:'https://weave.example'}])},
  {GATE_RESOURCES:JSON.stringify([{client_id:'weave',client_secret:'short',audience:'https://weave.example'}])},

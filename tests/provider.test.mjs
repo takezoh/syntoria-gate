@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,randomBytes,createHash} from 'node:crypto';
 import {request as httpRequest} from 'node:http';
+import {once} from 'node:events';
 import {Timestamp} from '@google-cloud/firestore';
 
 import {createService} from '../dist/service.js';
@@ -18,7 +19,7 @@ const namespace='gate_test_'+randomBytes(12).toString('hex');
 const storage=new Storage(db,namespace);
 const issuer='http://127.0.0.1:55436';
 const appRedirect='https://actions.example.test/auth-return.html';
-const config={issuer,firestoreProjectId:projectId,firestoreDatabaseId:'(default)',githubClientId:'github-client',githubClientSecret:'github-secret',githubUserId:'12345',cookieKeys:['a'.repeat(64)],jwks:{keys:[jwk]},port:55436,sessionCookieDomain:'example.test',browserSessionTtlSeconds:3600,browserApps:[{app_id:'actions',app_name:'Actions',redirect_uris:[appRedirect]},{app_id:'lore',app_name:'Notes',redirect_uris:['https://notes.example.test/auth-return.html']}],browserOrigins:['https://actions.example.test','https://notes.example.test'],clients:[{client_id:'desktop',client_name:'Desktop',redirect_uris:['http://127.0.0.1:55437/callback']}],resources:[{audience:'https://weave.example',client_id:'weave',client_secret:'s'.repeat(40),browser_client_id:'weave-browser'}]};
+const config={issuer,firestoreProjectId:projectId,firestoreDatabaseId:'(default)',githubClientId:'github-client',githubClientSecret:'github-secret',githubUserId:'12345',cookieKeys:['a'.repeat(64)],jwks:{keys:[jwk]},port:55436,sessionCookieDomain:'example.test',browserSessionTtlSeconds:3600,browserApps:[{app_id:'actions',app_name:'Actions',redirect_uris:[appRedirect]},{app_id:'lore',app_name:'Notes',redirect_uris:['https://notes.example.test/auth-return.html']}],browserOrigins:['https://actions.example.test','https://notes.example.test'],resources:[{audience:'https://weave.example',client_id:'weave',client_secret:'s'.repeat(40),browser_client_id:'weave-browser'}]};
 let service;
 const cookies=new Map();
 async function request(path,options={}){
@@ -27,6 +28,11 @@ async function request(path,options={}){
  const response=await fetch(new URL(path,issuer),{...options,redirect:'manual',headers});
  for(const value of response.headers.getSetCookie()){const [entry]=value.split(';');const index=entry.indexOf('=');const name=entry.slice(0,index),cookieValue=entry.slice(index+1);if(/(?:^|;)\s*max-age=0(?:;|$)/i.test(value))cookies.delete(name);else cookies.set(name,{value:cookieValue,path:/(?:^|;)\s*path=([^;]+)/i.exec(value)?.[1]??'/',raw:value});}
  const text=await response.text();return {status:response.status,location:response.headers.get('location'),headers:response.headers,text,json:()=>JSON.parse(text)};
+}
+async function register(metadata, base=issuer) {
+ const response=await fetch(new URL('/reg',base),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(metadata),redirect:'manual'});
+ const text=await response.text();
+ return {status:response.status,headers:response.headers,text,json:()=>JSON.parse(text)};
 }
 async function rawRequest(path,headers,body){
  return new Promise((resolve,reject)=>{
@@ -38,23 +44,27 @@ async function rawRequest(path,headers,body){
 }
 async function start(){service=await createService(config,storage,{exchange:async code=>code==='wrong'?'99999':'12345'});await new Promise(resolve=>service.server.listen(55436,'127.0.0.1',resolve));}
 async function stop(){await new Promise(resolve=>service.server.close(resolve));}
-async function connect(options={}){
+async function connect(client,options={}){
+ const redirectUri=options.redirectUri??client.redirect_uris[0];
  const verifier=randomBytes(32).toString('base64url');
- const params=new URLSearchParams({client_id:'desktop',redirect_uri:config.clients[0].redirect_uris[0],response_type:'code',scope:'openid',resource:'https://weave.example',code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256',state:'client-state'});
+ const params=new URLSearchParams({client_id:client.client_id,redirect_uri:redirectUri,response_type:'code',scope:'openid',resource:'https://weave.example',code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256',state:'client-state'});
  let r=await request('/auth?'+params);
  for(let i=0;i<12;i++){
   assert.equal(r.status,303,r.text);
-  if(r.location.startsWith(config.clients[0].redirect_uris[0])){
+  if(r.location.startsWith(redirectUri)){
    if(options.decision==='deny'){assert.equal(new URL(r.location).searchParams.get('error'),'access_denied');return;}
    const code=new URL(r.location).searchParams.get('code');assert.ok(code,r.location);
-   const result=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',client_id:'desktop',redirect_uri:config.clients[0].redirect_uris[0],code,code_verifier:options.wrongVerifier?'b'.repeat(43):verifier})});if(options.wrongVerifier){assert.equal(result.status,400);return;}assert.equal(result.status,200,result.text);return result.json();
+   const result=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',client_id:client.client_id,redirect_uri:redirectUri,code,code_verifier:options.wrongVerifier?'b'.repeat(43):verifier})});if(options.wrongVerifier){assert.equal(result.status,400);return;}assert.equal(result.status,200,result.text);return result.json();
   }
   if(r.location.startsWith('https://github.com/')){
    const state=new URL(r.location).searchParams.get('state');r=await request('/github/callback?'+new URLSearchParams({state,code:'good'}));continue;
   }
   const location=r.location;r=await request(location);
   if(r.status===200&&new URL(location,issuer).pathname.startsWith('/interaction/')){
-   assert.equal(r.headers.get('content-security-policy'),`default-src 'none'; form-action 'self' ${new URL(config.clients[0].redirect_uris[0]).origin}; frame-ancestors 'none'; base-uri 'none'`);
+   if(client.client_name)assert.match(r.text,/Unverified client name: &lt;MCP &amp; Client&gt;/);
+   else assert.match(r.text,/Unverified client name: No name supplied/);
+   assert.ok(r.text.includes(redirectUri),r.text);
+   assert.equal(r.headers.get('content-security-policy'),`default-src 'none'; form-action 'self' ${new URL(redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`);
    const csrf=/name="csrf" value="([^"]+)"/.exec(r.text)?.[1];assert.ok(csrf,r.text);
    r=await request(location,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',origin:issuer},body:new URLSearchParams({csrf,decision:options.decision??'approve'})});
   }
@@ -63,39 +73,112 @@ async function connect(options={}){
 }
 const introspect=token=>request('/token/introspection',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',authorization:'Basic '+Buffer.from('weave:'+config.resources[0].client_secret).toString('base64')},body:new URLSearchParams({token})});
 
+async function assertSharedRegistrationLimit(limits) {
+ const limitedNamespace=`${namespace}_limit_${randomBytes(6).toString('hex')}`;
+ const services=await Promise.all([new Storage(db,limitedNamespace,Date.now,limits),new Storage(db,limitedNamespace,Date.now,limits)]
+  .map(value=>createService(config,value,{exchange:async()=>{throw new Error('Unused');}})));
+ const bases=[];
+ try {
+  for(const instance of services){instance.server.listen(0,'127.0.0.1');await once(instance.server,'listening');bases.push(`http://127.0.0.1:${instance.server.address().port}`);}
+  const results=await Promise.all(bases.map((base,index)=>register({client_name:`quota-${index}`,redirect_uris:[`https://quota-${index}.example.test/callback`]},base)));
+  assert.deepEqual(results.map(result=>result.status).sort(),[201,429]);
+  const denied=results.find(result=>result.status===429);assert.equal(denied.json().error,'temporarily_unavailable');
+ } finally {
+  await Promise.all(services.filter(value=>value.server.listening).map(value=>new Promise(resolve=>value.server.close(resolve))));
+ }
+}
+
+async function assertRegistrationFailsClosed() {
+ const reference={doc(){return this;},collection(){return this;}};
+ const unavailableDb={collection(){return reference;},async runTransaction(){throw new Error('private Firestore details');}};
+ const failing=await createService(config,new Storage(unavailableDb,`${namespace}_unavailable`),{exchange:async()=>{throw new Error('Unused');}});
+ try {
+  failing.server.listen(0,'127.0.0.1');await once(failing.server,'listening');
+  const response=await register({redirect_uris:['https://unavailable.example.test/callback']},`http://127.0.0.1:${failing.server.address().port}`);
+  assert.equal(response.status,503,response.text);assert.doesNotMatch(response.text,/private Firestore details/);
+ } finally {
+  if(failing.server.listening)await new Promise(resolve=>failing.server.close(resolve));
+ }
+}
+
+async function assertRegistrationWindowNeverMovesBackward() {
+ const monotonicNamespace=`${namespace}_clock_${randomBytes(6).toString('hex')}`;
+ const limits={total:10,perMinute:1};
+ const alignedWindow=Math.ceil(Date.now()/60_000)*60_000+60_000;
+ const older=new Storage(db,monotonicNamespace,()=>alignedWindow-59_000,limits);
+ const current=new Storage(db,monotonicNamespace,()=>alignedWindow+1_000,limits);
+ const later=new Storage(db,monotonicNamespace,()=>alignedWindow+61_000,limits);
+ await current.upsert('Client','newer-window',{client_id:'newer-window'});
+ await assert.rejects(older.upsert('Client','stale-window',{client_id:'stale-window'}),error=>error.statusCode===429);
+ await later.upsert('Client','following-window',{client_id:'following-window'});
+}
+
 test('real provider / real Firestore Emulator: separate connections, restart, revoke and refresh',async()=>{
  try {
  await start();
- const initialCount=(await storage.listConnections('github:12345')).length;await connect({decision:'deny'});assert.equal((await storage.listConnections('github:12345')).length,initialCount);
- const missingPkce=await request('/auth?'+new URLSearchParams({client_id:'desktop',redirect_uri:config.clients[0].redirect_uris[0],response_type:'code',scope:'openid'}));assert.ok(new URL(missingPkce.location,issuer).searchParams.has('error'));
- await connect({wrongVerifier:true});
- const first=await connect();assert.ok(first.refresh_token);
- const verifier=createGateVerifier({issuer,audience:'https://weave.example',clientId:'weave',clientSecret:config.resources[0].client_secret,allowedClientIds:['desktop'],allowLoopbackHttp:true});
+ for(const metadata of [
+  {redirect_uris:['https://mcp.example.test/callback'],jwks_uri:'https://127.0.0.1:1/jwks'},
+  {redirect_uris:['https://mcp.example.test/callback'],sector_identifier_uri:'https://127.0.0.1:1/sector'},
+  {redirect_uris:['https://mcp.example.test/callback'],request_uris:['https://127.0.0.1:1/request']},
+  {redirect_uris:['https://mcp.example.test/callback'],token_endpoint_auth_method:'client_secret_basic'},
+  {redirect_uris:['https://mcp.example.test/callback'],client_secret:'supplied'},
+  {redirect_uris:['https://mcp.example.test/callback'],application_type:'native'},
+  {redirect_uris:['https://mcp.example.test/*']},
+  {redirect_uris:['http://127.0.0.1:55437/callback','https://mcp.example.test/callback']},
+  {redirect_uris:['https://user@mcp.example.test/callback']},
+  {redirect_uris:['https://mcp.example.test/callback#fragment']},
+  {redirect_uris:['https://mcp.example.test/callback'],grant_types:['client_credentials']},
+ ]) assert.ok((await register(metadata)).status>=400,JSON.stringify(metadata));
+ const oversized=await request('/reg',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({redirect_uris:['https://mcp.example.test/callback'],padding:'x'.repeat(8192)})});assert.equal(oversized.status,413);
+ const webResponse=await register({client_name:'<MCP & Client>',redirect_uris:['https://mcp.example.test/callback'],grant_types:['authorization_code','refresh_token'],client_uri:'http://127.0.0.1:1/client',logo_uri:'http://127.0.0.1:1/logo',software_id:'ignored',software_version:'ignored',scope:'openid'});
+ assert.equal(webResponse.status,201,webResponse.text);const webClient=webResponse.json();
+ assert.equal(webClient.application_type,'web');assert.equal(webClient.token_endpoint_auth_method,'none');assert.deepEqual(webClient.grant_types,['authorization_code','refresh_token']);assert.deepEqual(webClient.response_types,['code']);assert.equal('client_secret' in webClient,false);assert.equal('registration_access_token' in webClient,false);assert.equal('registration_client_uri' in webClient,false);
+ const nativeResponse=await register({redirect_uris:['http://127.0.0.1:55437/callback']});assert.equal(nativeResponse.status,201,nativeResponse.text);const nativeClient=nativeResponse.json();
+ assert.equal(nativeClient.application_type,'native');assert.equal(nativeClient.token_endpoint_auth_method,'none');assert.deepEqual(nativeClient.grant_types,['authorization_code']);
+ const storedWeb=await storage.find('Client',webClient.client_id);assert.equal(storedWeb.client_uri,undefined);assert.equal(storedWeb.logo_uri,undefined);assert.equal(storedWeb.software_id,undefined);assert.equal(storedWeb.scope,undefined);
+ const clientDocument=await storage.artifacts('Client').doc(createHash('sha256').update(webClient.client_id).digest('hex')).get();assert.ok(clientDocument.exists);assert.equal(clientDocument.get('expiresAt'),undefined);
+ const initialCount=(await storage.listConnections('github:12345')).length;await connect(webClient,{decision:'deny'});assert.equal((await storage.listConnections('github:12345')).length,initialCount);
+ const missingPkce=await request('/auth?'+new URLSearchParams({client_id:webClient.client_id,redirect_uri:webClient.redirect_uris[0],response_type:'code',scope:'openid'}));assert.ok(new URL(missingPkce.location,issuer).searchParams.has('error'));
+ await connect(webClient,{wrongVerifier:true});
+ const first=await connect(webClient);assert.ok(first.refresh_token);
+ const verifier=createGateVerifier({issuer,audience:'https://weave.example',clientId:'weave',clientSecret:config.resources[0].client_secret,browserClientId:'weave-browser',allowLoopbackHttp:true});
  assert.equal((await verifier.verifyToken(first.access_token)).userId,'github:12345');
  const a=(await introspect(first.access_token)).json();assert.equal(a.active,true);assert.equal(a.sub,'github:12345');assert.ok(a.connection_id);assert.equal(a.token_type,'Bearer');
- const second=await connect();const b=(await introspect(second.access_token)).json();assert.equal(b.active,true);assert.notEqual(a.connection_id,b.connection_id);
- await stop();await start();assert.equal((await introspect(first.access_token)).json().active,true);
+ const second=await connect(webClient);const b=(await introspect(second.access_token)).json();assert.equal(b.active,true);assert.notEqual(a.connection_id,b.connection_id);
+ const nativeFlow=await connect(nativeClient,{redirectUri:'http://127.0.0.1:55438/callback'});assert.ok(nativeFlow.access_token);assert.equal((await introspect(nativeFlow.access_token)).json().active,true);
+ for(const redirectUri of ['http://127.0.0.2:55438/callback','http://127.0.0.1:55438/other']) {
+  const invalid=await request('/auth?'+new URLSearchParams({client_id:nativeClient.client_id,redirect_uri:redirectUri,response_type:'code',scope:'openid',code_challenge:'a'.repeat(43),code_challenge_method:'S256'}));
+  assert.equal(invalid.status,400,invalid.location);
+ }
+ await stop();await start();assert.equal((await introspect(first.access_token)).json().active,true);assert.ok(await storage.find('Client',webClient.client_id));assert.ok(await storage.find('Client',nativeClient.client_id));
+ const deletedClient=await connect(nativeClient);
+ await storage.artifacts('Client').doc(createHash('sha256').update(nativeClient.client_id).digest('hex')).delete();
+ assert.deepEqual((await introspect(deletedClient.access_token)).json().active,false);
+ await assertSharedRegistrationLimit({total:1,perMinute:10});
+ await assertSharedRegistrationLimit({total:10,perMinute:1});
+ await assertRegistrationWindowNeverMovesBackward();
+ await assertRegistrationFailsClosed();
  const list=await request('/connections');assert.equal(list.status,200);assert.ok(list.text.includes(a.connection_id));
  assert.equal(list.headers.get('content-security-policy'),"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
  const csrf=/name="csrf" value="([^"]+)"/.exec(list.text)[1];
  assert.equal((await request('/connections/revoke',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:'wrong',id:a.connection_id})})).status,403);
  const revoked=await request('/connections/revoke',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,id:a.connection_id})});assert.equal(revoked.status,303);
  assert.equal((await introspect(first.access_token)).json().active,false);await assert.rejects(verifier.verifyToken(first.access_token),e=>e instanceof GateError&&e.status===401);assert.equal((await introspect(second.access_token)).json().active,true);
- const refresh=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:first.refresh_token,client_id:'desktop'})});assert.equal(refresh.status,400);
- const refreshGood=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:second.refresh_token,client_id:'desktop'})});assert.equal(refreshGood.status,200,refreshGood.text);const refreshed=(await introspect(refreshGood.json().access_token)).json();assert.equal(refreshed.connection_id,b.connection_id);
+ const refresh=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:first.refresh_token,client_id:webClient.client_id})});assert.equal(refresh.status,400);
+ const refreshGood=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:second.refresh_token,client_id:webClient.client_id})});assert.equal(refreshGood.status,200,refreshGood.text);const refreshed=(await introspect(refreshGood.json().access_token)).json();assert.equal(refreshed.connection_id,b.connection_id);
  assert.equal((await introspect(second.refresh_token)).json().active,false);
 
 
- const raceConnection=await connect();const racePrincipal=(await introspect(raceConnection.access_token)).json();
+ const raceConnection=await connect(webClient);const racePrincipal=(await introspect(raceConnection.access_token)).json();
  const raceList=await request('/connections');const raceCsrf=/name="csrf" value="([^"]+)"/.exec(raceList.text)[1];
  const [raceRefresh,raceRevoke]=await Promise.all([
- request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:'desktop',refresh_token:raceConnection.refresh_token})}),
+ request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:webClient.client_id,refresh_token:raceConnection.refresh_token})}),
  request('/connections/revoke',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:raceCsrf,id:racePrincipal.connection_id})})]);
  assert.equal(raceRevoke.status,303);assert.equal((await introspect(raceConnection.access_token)).json().active,false);
  if(raceRefresh.status===200) assert.equal((await introspect(raceRefresh.json().access_token)).json().active,false);
- const raceRetry=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:'desktop',refresh_token:raceRefresh.status===200?raceRefresh.json().refresh_token:raceConnection.refresh_token})});assert.equal(raceRetry.status,400);
- const reuseConnection=await connect();
- const concurrentRefresh=()=>request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:'desktop',refresh_token:reuseConnection.refresh_token})});
+ const raceRetry=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:webClient.client_id,refresh_token:raceRefresh.status===200?raceRefresh.json().refresh_token:raceConnection.refresh_token})});assert.equal(raceRetry.status,400);
+ const reuseConnection=await connect(webClient);
+ const concurrentRefresh=()=>request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:webClient.client_id,refresh_token:reuseConnection.refresh_token})});
  const reused=await Promise.all([concurrentRefresh(),concurrentRefresh()]);assert.ok(reused.filter(r=>r.status===200).length<=1);
  assert.equal((await introspect(second.access_token)).json().active,true);
  const A=adapter(storage);const artifact=new A('AuthorizationCode');const artifactId=randomBytes(16).toString('hex');
@@ -108,11 +191,11 @@ test('real provider / real Firestore Emulator: separate connections, restart, re
  await Promise.allSettled([tokens.upsert(raceId,{grantId:b.connection_id},60),storage.revoke(b.connection_id)]);
  assert.equal(await tokens.find(raceId),undefined);
  await assert.rejects(tokens.upsert(raceId,{grantId:b.connection_id},60));
- await tokens.upsert('expired',{grantId:'unrevoked'},-1);assert.equal(await tokens.find('expired'),undefined);
  await storage.saveLogin('single-state',{binding:'test'});const states=await Promise.all([storage.takeLogin('single-state','test'),storage.takeLogin('single-state','test')]);assert.equal(states.filter(Boolean).length,1);
- const noPrompt=await request('/auth?'+new URLSearchParams({client_id:'desktop',redirect_uri:config.clients[0].redirect_uris[0],response_type:'code',scope:'openid',prompt:'none',code_challenge:'a'.repeat(43),code_challenge_method:'S256'}));
+ const noPrompt=await request('/auth?'+new URLSearchParams({client_id:webClient.client_id,redirect_uri:webClient.redirect_uris[0],response_type:'code',scope:'openid',prompt:'none',code_challenge:'a'.repeat(43),code_challenge_method:'S256'}));
  assert.ok(new URL(noPrompt.location,issuer).searchParams.has('error'));
- const independentMcp=await connect();const independentMcpPrincipal=(await introspect(independentMcp.access_token)).json();assert.equal(independentMcpPrincipal.active,true);
+ const independentMcp=await connect(webClient);const independentMcpPrincipal=(await introspect(independentMcp.access_token)).json();assert.equal(independentMcpPrincipal.active,true);
+ await tokens.upsert('expired',{grantId:independentMcpPrincipal.connection_id},-1);assert.equal(await tokens.find('expired'),undefined);
  cookies.clear();const login=await request('/login');const state=new URL(login.location).searchParams.get('state');
  const denied=await request('/github/callback?'+new URLSearchParams({state,code:'wrong'}));assert.equal(denied.status,403);
  assert.equal((await request('/github/callback?'+new URLSearchParams({state,code:'good'}))).status,400);
@@ -152,7 +235,7 @@ test('real provider / real Firestore Emulator: separate connections, restart, re
  assert.equal((await request('/browser/session',{headers:{origin:'https://actions.example.test',authorization:'Bearer ignored'}})).status,401);
  const preflight=await request('/browser/logout',{method:'OPTIONS',headers:{origin:'https://actions.example.test','access-control-request-method':'POST','access-control-request-headers':'content-type,x-csrf-token'}});
  assert.equal(preflight.status,204);assert.equal(preflight.headers.get('access-control-allow-origin'),'https://actions.example.test');assert.equal(preflight.headers.get('access-control-allow-credentials'),'true');
- const sessionSdkConfig={issuer,audience:config.resources[0].audience,clientId:config.resources[0].client_id,clientSecret:config.resources[0].client_secret,allowedClientIds:[config.resources[0].browser_client_id],allowLoopbackHttp:true};
+ const sessionSdkConfig={issuer,audience:config.resources[0].audience,clientId:config.resources[0].client_id,clientSecret:config.resources[0].client_secret,browserClientId:config.resources[0].browser_client_id,allowLoopbackHttp:true};
  const localFetch=async(url,init)=>{const result=await request(new URL(url).pathname,init);return new Response(result.text,{status:result.status,headers:{'content-type':result.headers.get('content-type')??'application/json'}});};
  const browserVerifier=createGateVerifier(sessionSdkConfig,{fetch:localFetch});
  const browserPrincipal=await browserVerifier.verifySession(browserSecret);assert.equal(browserPrincipal.userId,'github:12345');assert.equal(browserPrincipal.clientId,'weave-browser');assert.equal(browserPrincipal.connectionId,sessionDoc.get('connectionId'));assert.ok(Object.isFrozen(browserPrincipal));

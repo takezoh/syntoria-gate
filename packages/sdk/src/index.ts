@@ -20,7 +20,7 @@ export interface GateConfig {
   audience: string;
   clientId: string;
   clientSecret: string;
-  allowedClientIds: readonly string[];
+  browserClientId: string;
   timeoutMs?: number;
   /** For isolated local tests only; forbidden when NODE_ENV is production. */
   allowLoopbackHttp?: boolean;
@@ -110,13 +110,10 @@ export function createGateVerifier(config: GateConfig, dependencies: GateDepende
   const allowHttp = config.allowLoopbackHttp === true;
   const issuer = config.issuer;
   const issuerUrl = safeUrl(issuer, allowHttp);
-  if (![config.audience, config.clientId, config.clientSecret].every(nonempty) ||
-      !Array.isArray(config.allowedClientIds) || config.allowedClientIds.length === 0 ||
-      !config.allowedClientIds.every(nonempty)) throw new TypeError('Invalid Gate verifier configuration');
+  if (![config.audience, config.clientId, config.clientSecret, config.browserClientId].every(nonempty)) throw new TypeError('Invalid Gate verifier configuration');
   const timeoutMs = config.timeoutMs ?? 3000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new TypeError('Invalid Gate timeout');
   const audience = config.audience;
-  const allowedClients = new Set(config.allowedClientIds);
   const authorization = `Basic ${Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`, 'utf8').toString('base64')}`;
   const fetcher = dependencies.fetch ?? globalThis.fetch;
   const now = dependencies.now ?? Date.now;
@@ -161,16 +158,16 @@ export function createGateVerifier(config: GateConfig, dependencies: GateDepende
       }, controller.signal);
       if (typeof data.active !== 'boolean') throw new GateError(503);
       if (!data.active) throw new GateError(401);
-      const clients = [data.azp, data.client_id].filter(value => value !== undefined);
+      const clientId = data.client_id;
+      const authorizedParty = data.azp;
       if (data.token_type !== 'Bearer' || data.gate_approved !== true || data.iss !== issuer || !nonempty(data.sub) || !nonempty(data.connection_id) ||
           !Number.isSafeInteger(data.exp) || (data.exp as number) <= now() / 1000 ||
-          clients.length === 0 || !clients.every(nonempty) || new Set(clients).size !== 1 ||
-          !allowedClients.has(clients[0] as string)) throw new GateError(401);
+          !nonempty(clientId) || (authorizedParty !== undefined && (!nonempty(authorizedParty) || clientId !== authorizedParty))) throw new GateError(401);
       const audiences = typeof data.aud === 'string' ? [data.aud] : data.aud;
       if (!Array.isArray(audiences) || audiences.length === 0 || !audiences.every(nonempty) || !audiences.includes(audience)) {
         throw new GateError(401);
       }
-      return Object.freeze({ issuer, userId: data.sub, connectionId: data.connection_id, clientId: clients[0] as string });
+      return Object.freeze({ issuer, userId: data.sub, connectionId: data.connection_id, clientId });
     }
     try { return await Promise.race([authorize(), timeout]); }
     catch (error) { throw error instanceof GateError ? error : new GateError(503); }
@@ -201,7 +198,7 @@ export function createGateVerifier(config: GateConfig, dependencies: GateDepende
       if (typeof data.active !== 'boolean') throw new GateError(503);
       if (!data.active) throw new GateError(401);
       if (data.iss !== issuer || data.aud !== audience || !nonempty(data.sub) || !nonempty(data.connection_id) ||
-          typeof data.client_id !== 'string' || !allowedClients.has(data.client_id) || data.gate_approved !== true ||
+          !nonempty(data.client_id) || data.client_id !== config.browserClientId || data.gate_approved !== true ||
           data.session_type !== 'browser' || !nonempty(data.csrf_token) || !Number.isSafeInteger(data.exp) || (data.exp as number) <= now() / 1000) {
         throw new GateError(401);
       }

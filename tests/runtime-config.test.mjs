@@ -22,6 +22,8 @@ test('runtime configuration validates exact HTTPS issuer and browser redirects u
     { issuer: 'http://gate.example.test' },
     { browserSessionTtlSeconds: 3599 },
     { browserSessionTtlSeconds: 2592001 },
+    { clients: [{ client_id: 'legacy-public-client' }] },
+    { unexpected: true },
     { browserApps: [{ ...example.browserApps[0], redirect_uris: ['http://actions.example.test/return'] }] },
     { browserApps: [{ ...example.browserApps[0], redirect_uris: ['https:actions.example.test/return'] }] },
     { browserApps: [{ ...example.browserApps[0], redirect_uris: ['https://actions.example.test\\return'] }] },
@@ -37,7 +39,7 @@ test('renderer injects runtime URLs and registries without changing secret refer
   assert.equal(env.GATE_ISSUER.value, example.issuer);
   assert.equal(env.GATE_SESSION_COOKIE_DOMAIN.value, example.sessionCookieDomain);
   assert.equal(env.GATE_GITHUB_USER_ID.value, example.githubUserId);
-  assert.deepEqual(JSON.parse(env.GATE_CLIENTS.value), example.clients);
+  assert.equal('GATE_CLIENTS' in env, false);
   assert.deepEqual(JSON.parse(env.GATE_BROWSER_APPS.value), example.browserApps);
   assert.equal(env.GATE_RESOURCES.valueFrom.secretKeyRef.name, 'gate-resources');
   assert.equal(JSON.stringify(manifest).includes('GATE_ISSUER'), false);

@@ -1,6 +1,6 @@
 # Application integration
 
-Register each application, resource API and MCP client explicitly using the [configuration contract](configuration.md). A browser app registration, a resource introspection client and an MCP OAuth client have separate identities and responsibilities.
+Register each browser application and resource API explicitly using the [configuration contract](configuration.md). MCP clients register dynamically through DCR. A browser app registration, a resource introspection client and an MCP OAuth client have separate identities and responsibilities.
 
 ## Browser applications
 
@@ -25,12 +25,12 @@ const verifier = createGateVerifier({
   audience: settings.resourceAudience,
   clientId: settings.resourceClientId,
   clientSecret: settings.resourceClientSecret,
-  allowedClientIds: [settings.browserClientId, settings.mcpClientId],
+  browserClientId: settings.browserClientId,
 });
 
 try {
   const principal = await verifier.verifySession(sessionCookieValue);
-  // Apply the API's explicit issuer/subject/client admission and user data scope.
+  // Apply the API's explicit enabled issuer/subject admission and user data scope.
   await handleAuthorizedRequest(principal);
 } catch (error) {
   if (error instanceof GateError) {
@@ -60,11 +60,11 @@ Fetch Gate's `GET /browser/session` with credentials from a registered SPA origi
 
 ## MCP OAuth clients
 
-Use Gate's `/.well-known/openid-configuration` to obtain authorization, token, introspection and revocation endpoints. Use authorization code with PKCE S256, the exact registered redirect, `scope=openid`, an explicit resource audience and client-owned state validation. Public MCP clients use no client secret. Request only the registered audience; Gate uses opaque Bearer access tokens rather than self-contained access JWTs.
+Use Gate's `/.well-known/openid-configuration` to obtain registration, authorization, token, introspection and revocation endpoints. Dynamically register a public client through the advertised registration endpoint and persist its returned client ID with the issuer and callback binding. Do not use a predefined public client ID. Use authorization code with PKCE S256, the exact registered redirect, `scope=openid`, an explicit resource audience and client-owned state validation. Public MCP clients use no client secret. Request only the registered audience; Gate uses opaque Bearer access tokens rather than self-contained access JWTs.
 
 Resource services verify each Bearer token with `verifyToken` or `authenticate`. An ID token is an identity assertion, not an API access token. Refresh, authorization-code consumption and OAuth revocation remain owned by `oidc-provider`. Access and ID tokens have a configured lifetime of 300 seconds; authorization codes have 60 seconds, and grants/refresh tokens have a configured 30-day lifetime.
 
-OAuth connection approval is independent of the common browser device approval. Register the permitted MCP client in the resource API's local admission policy as well as Gate. Keep tokens in client-managed secure storage and keep introspection credentials only on the resource server.
+OAuth connection approval is independent of the common browser device approval. The resource API must map the verified issuer/subject to an explicitly enabled internal user, without a static MCP-client allowlist. `verifyToken` requires a nonempty `client_id`; when `azp` is present it must match. `verifySession` additionally checks the configured browser client ID. Keep tokens in client-managed secure storage and keep introspection credentials only on the resource server.
 
 ## Shared-cookie trust boundary
 
