@@ -23,6 +23,8 @@ The authoritative runtime validation is in [src/config.ts](../src/config.ts). [c
 
 The complete configuration requires HTTPS, including local browser-session development. HTTP loopback redirect URIs are supported for OAuth clients; they do not make an HTTP Gate issuer valid. The SDK's isolated-test HTTP option does not relax service configuration.
 
+For the account restriction and the distinction between public client registration, operator resource registration and connection approval, see [identity and registration controls](security.md).
+
 ## Registrations
 
 MCP clients use the advertised DCR registration endpoint. Supply `redirect_uris` and public-client metadata, not a preassigned client ID. Supported fields are `client_name`, `application_type`, `grant_types`, `response_types`, `redirect_uris` and `token_endpoint_auth_method`. The authentication method is `none`, response type is `code`, and grants include `authorization_code` with optional `refresh_token`. Missing application type is inferred from all-HTTPS web callbacks or all-HTTP-loopback native callbacks. Mixed classes, wildcards, credentials and fragments are rejected. Native loopback port matching is handled by the OAuth provider.

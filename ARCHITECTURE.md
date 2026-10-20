@@ -28,6 +28,8 @@ Gate derives browser CORS origins from registered browser return URIs. Session b
 
 Registration accepts at most 8192 bytes, ten redirect URIs of at most 2048 characters each and a client name of at most 100 characters. Names are self-asserted and shown as unverified beside the actual redirect at approval. Inert unsupported metadata is omitted from persistence and display. Registration management and client-metadata-document discovery are disabled. Firestore transactions limit registrations to 1000 over the namespace lifetime and 20 per fixed minute across instances. These limits bound registration storage, not all request costs; exhaustion can deny new registrations and requires operator intervention. Existing approved connections remain independently usable.
 
+See [identity and registration controls](docs/security.md) for the exact GitHub account check, public-client registration limits and operator-only resource/browser registrations. Gate does not maintain an MCP tool registry.
+
 ## Persistence and authorization
 
 | Firestore collection | Contents and retention |

@@ -17,6 +17,7 @@ MCP clients dynamically register through OAuth DCR, then connect through authori
 | Document | Purpose |
 | --- | --- |
 | [Architecture](ARCHITECTURE.md) | Responsibilities, trust boundaries and persistence guarantees |
+| [Identity and registration controls](docs/security.md) | Single-account restriction, public DCR limits, operator-only resource registration and approval boundaries |
 | [Application integration](docs/integration.md) | SPA sessions, API verification, MCP clients and the Node SDK |
 | [HTTP interface](docs/api.md) | Browser endpoints, cookies, discovery and error behavior |
 | [Configuration](docs/configuration.md) | Environment variables, registrations and secret handling |
