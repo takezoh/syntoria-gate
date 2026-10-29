@@ -4,7 +4,7 @@ All paths are relative to the configured HTTPS issuer. Gate serves HTML for its 
 
 ## Discovery and OAuth
 
-Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, supported PKCE methods and JWKS. Use the advertised endpoints rather than hard-coding `oidc-provider` routes. The metadata advertises `registration_endpoint` for public MCP clients. POST bounded JSON public-client metadata there to obtain a server-generated `client_id` with HTTP 201. Gate issues no client secret, registration access token or management endpoint. Registration alone grants no access; authorization requires personal login, connection approval and PKCE S256. Invalid metadata returns 400, oversized bodies 413, exhausted registration rate/capacity 429, and registration storage unavailability 503. See [registration constraints](configuration.md#registrations). Resource clients authenticate introspection using their private credentials and are restricted to their configured audience.
+Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, supported PKCE methods and JWKS. Use the advertised endpoints rather than hard-coding `oidc-provider` routes. The metadata advertises `registration_endpoint` for public MCP clients. POST bounded JSON public-client metadata there to obtain a server-generated `client_id` with HTTP 201. Gate issues no client secret, registration access token or management endpoint. Registration alone grants no access; authorization requires personal login, connection approval and PKCE S256. A registration that is not approved within 24 hours expires and is then treated as an unknown client; the first approval makes it permanent. Invalid metadata returns 400, oversized bodies 413, exhausted registration rate/capacity 429, and registration storage unavailability 503. See [registration constraints](configuration.md#registrations). Resource clients authenticate introspection using their private credentials and are restricted to their configured audience.
 
 `GET /github/callback` is Gate's internal GitHub OAuth return endpoint. It consumes a bound, expiring, single-use state and checks the returned immutable numeric GitHub ID against the configured account. A different account is rejected with 403. Applications must start a login flow rather than constructing a callback URL or approval transaction themselves.
 
@@ -21,7 +21,7 @@ Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, s
 | `OPTIONS /browser/session` | Registered Origin, requested method GET | 204 for allowed preflight |
 | `OPTIONS /browser/logout` | Registered Origin, requested method POST | 204 for allowed preflight |
 
-Browser preflights accept only `Content-Type` and `X-CSRF-Token` request headers. Credentialed responses echo the exact permitted Origin and use `Vary`; no wildcard origin is used. Server-to-server introspection is not a public SPA endpoint. Form and JSON bodies parsed by Gate's custom handlers are limited to 8192 bytes.
+Browser preflights accept only `Content-Type` and `X-CSRF-Token` request headers. Credentialed responses echo the exact permitted Origin and use `Vary`; no wildcard origin is used. Server-to-server introspection is not a public SPA endpoint. Form and JSON bodies parsed by Gate's custom handlers are limited to 8192 bytes, except change confirmation requests, which are limited to 16384 bytes. An oversized JSON body returns 413.
 
 ### Session introspection
 
@@ -44,13 +44,47 @@ The SDK handles the private resource Basic authentication encoding. A resource c
 
 `exp` is Unix epoch seconds. Inactive, expired, malformed session secrets or revoked connections return `{active:false}` after resource authentication. Missing/wrong resource credentials return 401, an audience mismatch returns 403, and malformed request structure returns 400. Storage failures on browser paths return 503. A successful response must still be checked by the resource's SDK and its local enabled issuer/subject admission policy.
 
+## Change confirmations
+
+A resource asks the person to approve one exact change. The resource renders the summary and binds it to its own change hash; Gate shows it to the signed-in person, records the decision and lets the resource consume an approval once. Gate does not interpret the change. See [resource integration](integration.md#confirming-a-change) for the resource-side sequence.
+
+| Method and path | Request | Result |
+| --- | --- | --- |
+| `POST /confirmations` | Resource Basic authentication; JSON `{subject,connection_id,reference,change_hash,summary}` | 201 `{id,url}` |
+| `POST /confirmations/consume` | Resource Basic authentication; JSON `{id,reference,change_hash}` | 200 `{status}`; `consumed` adds `subject`, `connection_id` and `decided_at` |
+| `POST /confirmations/cancel` | Resource Basic authentication; JSON `{id,reference}` | 204, also when nothing was cancelled |
+| `GET /confirm` | Exactly one `id` | HTML approval page for the signed-in person; a sign-in page otherwise |
+| `GET /confirm/sign-in` | Exactly one `id` | 303 to GitHub sign-in that returns to the confirmation |
+| `POST /confirm` | Form fields `id`, `csrf`, `decision=approve\|deny`; issuer Origin and identity session | 303 to the confirmation; 409 when it is no longer pending |
+
+Creation rules:
+
+- `subject` must be the configured account, and `connection_id` an active OAuth connection of that account: approved, not revoked, with an unexpired grant. Otherwise 403.
+- `reference` is the resource's own record ID, 1–128 visible ASCII characters, unique per resource (409 on reuse).
+- `change_hash` is `sha256:` followed by 64 lowercase hex characters.
+- `summary` is `{"title": string, "lines": string[]}`: plain text without control characters, a title of at most 120 characters, 1–64 lines and at most 4000 characters in total. Gate rejects a larger summary with 400 and never truncates it.
+
+A confirmation has no timer of its own. It is valid while the requesting connection is active, and Gate treats it as expired once that connection is revoked or its grant expires. Consumption results:
+
+| Stored state | `status` |
+| --- | --- |
+| Approved, connection active | `consumed`, exactly once; the record becomes `used` |
+| Pending, connection active | `pending` |
+| Denied | `denied` |
+| Already consumed | `used` |
+| Cancelled, connection inactive, another resource, reference or change hash, or missing | `expired` |
+
+Only `consumed` authorizes the change. Missing or wrong resource credentials return 401, invalid bodies 400, and storage failures 503.
+
+The approval page shows the requesting client's unverified name from Gate's own connection record, the resource audience and every summary line, HTML-escaped. Before sign-in, Gate shows the same page for every well-formed ID. A different signed-in account, or an unknown ID, receives 404. Gate deletes the summary when the person denies, or when the resource consumes or cancels the confirmation.
+
 ## Management and health
 
 | Method and path | Behavior |
 | --- | --- |
 | `GET /` | Redirect to `/connections` |
 | `GET /login` | Start GitHub identity login or return an already identified user to `/connections` |
-| `GET /connections` | HTML list of the configured user's active browser/OAuth connections; identity login required |
+| `GET /connections` | HTML list of the configured user's active AI clients and browsers, with each client's unverified name, shortened client ID and approval date; identity login required |
 | `POST /connections/revoke` | Form `id` and identity-session `csrf`; issuer Origin required; revoke one connection, then redirect to `/connections` |
 | `GET /healthz` | Process liveness, 200 `ok`; used by the Cloud Run liveness probe |
 | `GET /readyz` | Read-only Firestore readiness, 200 `ok` or 503 `unavailable`; response deadline two seconds |

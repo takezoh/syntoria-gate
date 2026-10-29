@@ -57,6 +57,38 @@ For OAuth, the grant includes the configured resources, while each issued access
 token has its requested resource audience. Gate does not ask the user to select
 individual tools or feature permissions.
 
+## Change confirmations
+
+A change confirmation records that the signed-in person approved one exact change
+that a resource described. The AI that asked for the change takes no part in the
+decision: it can only show the Gate URL.
+
+- Only a configured resource, authenticated with its introspection credentials,
+  can create, consume or cancel a confirmation, and only its own. Another resource
+  receives the same `expired` answer as for a missing record.
+- A confirmation must name the configured account and an active OAuth connection
+  of that account. It stays valid only while that connection is approved, not
+  revoked and backed by an unexpired grant.
+- Before sign-in, Gate shows the same page for every well-formed ID. After sign-in,
+  only the confirmation's subject can view or decide it. A decision needs the issuer
+  Origin, the identity session's CSRF value and exactly the expected form fields,
+  and it is final.
+- Consumption checks the resource, reference and change hash and moves an approval
+  to `used` in one Firestore transaction, so it succeeds once even under concurrent
+  calls.
+- The summary is resource-supplied memory or account data. Gate escapes it, never
+  truncates it, and deletes it on denial, consumption or cancellation; otherwise
+  Firestore TTL removes it after the connection's grant expires.
+
+The confirmation shows that the person's signed-in Gate session approved the change.
+It does not show that the person read the summary, and it does not stop an agent
+that controls the person's signed-in browser. Gate requires no additional user
+verification at approval.
+
+All Gate pages use one stylesheet admitted by its hash in the Content Security
+Policy. Pages load no scripts, fonts or other external resources, carry no inline
+style attributes and cannot be framed.
+
 ## What registration means
 
 Gate does not register MCP tool definitions or proxy MCP tool calls. Weave, Lore
@@ -94,16 +126,27 @@ untrusted JSON to a constrained public authorization-code profile in
   metadata is rejected without fetching it; unsupported inert fields are omitted.
 
 [Firestore storage](../src/storage.ts) transactionally permits at most 1000 client
-registrations over the namespace lifetime and 20 per fixed minute, shared across
+registrations per fixed 24-hour window and 20 per fixed minute, shared across
 service instances. Limit exhaustion returns HTTP 429; registration storage failure
 fails closed. These are global capacity/rate limits, not per-user or per-IP
-identity checks. They bound registration storage but do not eliminate request costs
-or the possibility that another caller exhausts new-registration capacity.
+identity checks. Another caller can still exhaust new-registration capacity, but
+only until the current 24-hour window ends. The limits bound pending registration
+storage but do not eliminate request costs.
 
-DCR Client records persist without TTL. Registration management, registration
+A new DCR Client record is pending for 24 hours. Authorization, approval and
+introspection treat an expired pending client as missing, and Firestore TTL deletes
+it later. The first approved connection removes the expiry in the same transaction
+that creates the connection; approval fails without a connection when the client
+is missing or expired. Approved Client records, and records created before pending
+expiry was introduced, persist without TTL. Registration management, registration
 access tokens and client-ID metadata-document discovery are disabled. There is no
 public API to edit registrations or reset capacity. Fixed public-client aliases
 are not supported.
+
+Registration itself cannot require the person's authentication: MCP clients
+register anonymously from their own process or service, without Gate's browser
+cookies or an initial access token. Gate therefore keeps registration inert and
+places the authorization decision at sign-in and connection approval.
 
 ## Resource and request boundaries
 
@@ -133,7 +176,7 @@ an operation whose final authorization check already completed.
   [transactional storage](../src/storage.ts) and [consumer SDK](../packages/sdk/src/index.ts).
 - [Provider integration tests](../tests/provider.test.mjs) cover another GitHub
   account being rejected, DCR, explicit approval, PKCE, resource separation,
-  shared quotas and revocation. Their GitHub exchange is synthetic; they do not
+  shared quotas, revocation and change confirmations. Their GitHub exchange is synthetic; they do not
   establish live GitHub or a particular MCP host's acceptance.
 - [Architecture](../ARCHITECTURE.md), [HTTP interface](api.md) and
   [application integration](integration.md).

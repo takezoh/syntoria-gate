@@ -1,18 +1,26 @@
 import { createHash } from 'node:crypto';
-import { Firestore, Timestamp, type DocumentReference, type Transaction } from '@google-cloud/firestore';
+import { FieldValue, Firestore, Timestamp, type DocumentReference, type Transaction } from '@google-cloud/firestore';
 import type { AdapterPayload } from 'oidc-provider';
+import type { ConfirmationSummary } from './confirmation.js';
 
 const key = (value: string) => createHash('sha256').update(value).digest('hex');
 export interface IdentitySession { userId: string; csrf: string; expiresAt: Timestamp }
 export interface BrowserSession { userId: string; connectionId: string; csrf: string; createdAt: Timestamp; expiresAt: Timestamp }
-export interface LoginState { binding: string; interaction?: string }
+export interface LoginState { binding: string; interaction?: string; confirmation?: string }
 export interface BrowserLoginAttempt { appId: string; appName: string; redirectUri: string; deviceLabel: string; stateHash: string; bindingHash: string; createdAt: Timestamp; expiresAt: Timestamp }
 export interface BrowserApproval { appId: string; appName: string; redirectUri: string; bindingHash: string; userId: string; csrf: string; deviceLabel: string; createdAt: Timestamp; expiresAt: Timestamp }
 export interface Connection { id: string; userId: string; clientId: string; clientName?: string; createdAt: string; revoked: boolean; kind?: 'browser' | 'oauth'; subject?: string; approved?: boolean; deviceLabel?: string }
 export interface IssuedBrowserSession { redirectUri: string; connectionId: string }
-export interface RegistrationLimits { total: number; perMinute: number }
+export type ConfirmationStatus = 'pending' | 'approved' | 'denied' | 'used' | 'cancelled';
+export interface Confirmation { resourceClientId: string; audience: string; subject: string; connectionId: string; clientId: string; clientName?: string; reference: string; changeHash: string; summary?: ConfirmationSummary; status: ConfirmationStatus; createdAt: Timestamp; expiresAt: Timestamp; decidedAt?: Timestamp }
+export interface NewConfirmation { resourceClientId: string; audience: string; subject: string; connectionId: string; reference: string; changeHash: string; summary: ConfirmationSummary }
+export interface ConfirmationView { state: 'pending' | 'approved' | 'denied' | 'invalid'; confirmation: Confirmation }
+export type ConsumeResult = { status: 'consumed'; subject: string; connectionId: string; decidedAt: Timestamp } | { status: 'pending' | 'denied' | 'used' | 'expired' };
+export interface RegistrationLimits { perWindow: number; perMinute: number }
 
-export const DEFAULT_REGISTRATION_LIMITS: Readonly<RegistrationLimits> = Object.freeze({ total: 1_000, perMinute: 20 });
+export const DEFAULT_REGISTRATION_LIMITS: Readonly<RegistrationLimits> = Object.freeze({ perWindow: 1_000, perMinute: 20 });
+/** An unapproved registration expires after this period; the capacity window has the same length. */
+export const PENDING_REGISTRATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class RegistrationLimitError extends Error {
   readonly statusCode = 429;
@@ -37,10 +45,21 @@ function activeTimestamp(value: unknown, now: number): value is Timestamp {
   return value instanceof Timestamp && value.toMillis() > now;
 }
 
+/** Shared fixed-window counter; a stale instance clock never moves the stored window backward. */
+function fixedWindow(storedWindow: unknown, storedRequests: unknown, now: number, length: number) {
+  const current = Math.floor(now / length);
+  if (storedWindow !== undefined && (!Number.isSafeInteger(storedWindow) || (storedWindow as number) < 0)) throw new Error('Invalid registration counters');
+  if (storedRequests !== undefined && (!Number.isSafeInteger(storedRequests) || (storedRequests as number) < 0)) throw new Error('Invalid registration counters');
+  if (!Number.isSafeInteger(current) || current < 0) throw new Error('Invalid registration counters');
+  const window = storedWindow === undefined ? current : Math.max(storedWindow as number, current);
+  const requests = storedWindow === window ? (storedRequests as number | undefined) ?? 0 : 0;
+  return { window, requests };
+}
+
 export class Storage {
   constructor(readonly db: Firestore, private namespace = 'gate', private now: () => number = Date.now, private registrationLimits: Readonly<RegistrationLimits> = DEFAULT_REGISTRATION_LIMITS) {
     if (!/^[a-zA-Z0-9_-]+$/.test(namespace)) throw new Error('Invalid collection namespace');
-    if (!Number.isSafeInteger(registrationLimits.total) || registrationLimits.total < 1 || !Number.isSafeInteger(registrationLimits.perMinute) || registrationLimits.perMinute < 1) throw new Error('Invalid registration limits');
+    if (!Number.isSafeInteger(registrationLimits.perWindow) || registrationLimits.perWindow < 1 || !Number.isSafeInteger(registrationLimits.perMinute) || registrationLimits.perMinute < 1) throw new Error('Invalid registration limits');
   }
   async ready() {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -57,8 +76,10 @@ export class Storage {
   private browserLoginAttempts() { return this.db.collection(`${this.namespace}_browser_login_attempts`); }
   private browserApprovals() { return this.db.collection(`${this.namespace}_browser_approvals`); }
   private identitySessions() { return this.db.collection(`${this.namespace}_identity_sessions`); }
-  private registrationQuota() { return this.db.collection(`${this.namespace}_dcr_state`).doc('quota'); }
+  private registrationCapacity() { return this.db.collection(`${this.namespace}_dcr_state`).doc('capacity'); }
   private registrationRate() { return this.db.collection(`${this.namespace}_dcr_state`).doc('rate'); }
+  private confirmation(id: string) { return this.db.collection(`${this.namespace}_confirmations`).doc(key(id)); }
+  private confirmationReference(resourceClientId: string, reference: string) { return this.db.collection(`${this.namespace}_confirmation_references`).doc(key(JSON.stringify([resourceClientId, reference]))); }
   private grantId(model: string, id: string, payload: AdapterPayload) { return model === 'Grant' ? id : payload.grantId; }
   private async active(tx: Transaction, grantId?: string, allowMissing = false) {
     if (!grantId) return true;
@@ -68,30 +89,24 @@ export class Storage {
   }
   private async upsertClient(id: string, payload: AdapterPayload) {
     const ref = this.artifacts('Client').doc(key(id));
-    const quotaRef = this.registrationQuota();
+    const capacityRef = this.registrationCapacity();
     const rateRef = this.registrationRate();
     const now = this.now();
     try {
       await this.db.runTransaction(async tx => {
-        const [previous, quota, rate] = await Promise.all([tx.get(ref), tx.get(quotaRef), tx.get(rateRef)]);
+        const [previous, capacity, rate] = await Promise.all([tx.get(ref), tx.get(capacityRef), tx.get(rateRef)]);
         if (previous.exists) {
           if (JSON.stringify(previous.get('payload')) !== JSON.stringify(payload)) throw new Error('Dynamic client metadata is immutable');
           return;
         }
-        const total = quota.get('total') ?? 0;
-        const currentWindow = Math.floor(this.now() / 60_000);
-        const storedWindow: unknown = rate.get('window');
-        const storedRequests: unknown = rate.get('requests');
-        if (storedWindow !== undefined && (!Number.isSafeInteger(storedWindow) || (storedWindow as number) < 0)) throw new Error('Invalid registration counters');
-        if (storedRequests !== undefined && (!Number.isSafeInteger(storedRequests) || (storedRequests as number) < 0)) throw new Error('Invalid registration counters');
-        const window = storedWindow === undefined ? currentWindow : Math.max(storedWindow as number, currentWindow);
-        const requests = storedWindow === window ? storedRequests ?? 0 : 0;
-        if (!Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(currentWindow) || currentWindow < 0 || !Number.isSafeInteger(window)) throw new Error('Invalid registration counters');
-        if (total >= this.registrationLimits.total) throw new RegistrationLimitError('capacity');
-        if ((requests as number) >= this.registrationLimits.perMinute) throw new RegistrationLimitError('rate');
-        tx.create(ref, { id, payload, createdAt: Timestamp.fromMillis(now) });
-        tx.set(quotaRef, { total: total + 1 });
-        tx.set(rateRef, { window, requests: (requests as number) + 1 });
+        const daily = fixedWindow(capacity.get('window'), capacity.get('requests'), now, PENDING_REGISTRATION_TTL_MS);
+        const minute = fixedWindow(rate.get('window'), rate.get('requests'), now, 60_000);
+        if (daily.requests >= this.registrationLimits.perWindow) throw new RegistrationLimitError('capacity');
+        if (minute.requests >= this.registrationLimits.perMinute) throw new RegistrationLimitError('rate');
+        // Pending until its first approved connection; Firestore TTL removes abandoned registrations.
+        tx.create(ref, { id, payload, createdAt: Timestamp.fromMillis(now), expiresAt: Timestamp.fromMillis(now + PENDING_REGISTRATION_TTL_MS) });
+        tx.set(capacityRef, { window: daily.window, requests: daily.requests + 1 });
+        tx.set(rateRef, { window: minute.window, requests: minute.requests + 1 });
       });
     } catch (error) {
       if (error instanceof RegistrationLimitError) throw error;
@@ -119,7 +134,9 @@ export class Storage {
     const document = await tx.get(ref);
     if (!document.exists) return undefined;
     const model = document.ref.parent.parent!.id;
-    if (model !== key('Client') && !activeTimestamp(document.get('expiresAt'), this.now())) return undefined;
+    // Approved and earlier registrations have no expiresAt; pending registrations expire like other artifacts.
+    const permanentClient = model === key('Client') && document.get('expiresAt') === undefined;
+    if (!permanentClient && !activeTimestamp(document.get('expiresAt'), this.now())) return undefined;
     const payload = document.get('payload') as AdapterPayload;
     const grantId = model === key('Grant') ? document.get('id') as string : payload.grantId;
     return await this.active(tx, grantId) ? payload : undefined;
@@ -146,8 +163,13 @@ export class Storage {
   async addConnection(id: string, userId: string, clientId: string, clientName?: string) {
     await this.db.runTransaction(async tx => {
       const ref = this.connection(id);
-      const previous = await tx.get(ref);
+      const clientRef = this.artifacts('Client').doc(key(clientId));
+      const [previous, client] = await Promise.all([tx.get(ref), tx.get(clientRef)]);
       if (previous.exists) throw new Error('Connection already exists');
+      const expiresAt: unknown = client.get('expiresAt');
+      if (!client.exists || client.get('id') !== clientId || (expiresAt !== undefined && !activeTimestamp(expiresAt, this.now()))) throw new Error('Client registration missing or expired');
+      // The first approval makes the registration permanent in the same transaction.
+      if (expiresAt !== undefined) tx.update(clientRef, { expiresAt: FieldValue.delete() });
       tx.create(ref, { id, userId, clientId, ...(clientName ? { clientName } : {}), subject: userId, kind: 'oauth', approved: true, createdAt: new Date(this.now()).toISOString(), revoked: false });
     });
   }
@@ -267,6 +289,73 @@ export class Storage {
       if (!payload || (payload as unknown as LoginState).binding !== binding) return undefined;
       tx.delete(ref);
       return payload as unknown as LoginState;
+    });
+  }
+  /** An OAuth connection is active while it is approved, unrevoked and backed by an unexpired grant. */
+  private async activeConnection(tx: Transaction, id: string, userId: string) {
+    const [connection, grant] = await Promise.all([tx.get(this.connection(id)), tx.get(this.artifacts('Grant').doc(key(id)))]);
+    const expiresAt: unknown = grant.get('expiresAt');
+    if (!connection.exists || connection.get('kind') !== 'oauth' || connection.get('approved') !== true || connection.get('revoked') === true || connection.get('userId') !== userId || !grant.exists || !activeTimestamp(expiresAt, this.now())) return undefined;
+    return { clientId: connection.get('clientId') as string, clientName: connection.get('clientName') as string | undefined, expiresAt };
+  }
+  private async readConfirmation(tx: Transaction, id: string) {
+    const snapshot = await tx.get(this.confirmation(id));
+    return snapshot.exists ? snapshot.data() as Confirmation : undefined;
+  }
+  async createConfirmation(id: string, input: NewConfirmation): Promise<'created' | 'inactive' | 'duplicate'> {
+    const ref = this.confirmation(id);
+    const referenceRef = this.confirmationReference(input.resourceClientId, input.reference);
+    return this.db.runTransaction(async tx => {
+      const [connection, existing, reference] = await Promise.all([this.activeConnection(tx, input.connectionId, input.subject), tx.get(ref), tx.get(referenceRef)]);
+      if (!connection) return 'inactive';
+      if (existing.exists || reference.exists) return 'duplicate';
+      // A confirmation has no timer of its own: it lives as long as the requesting connection's grant.
+      tx.create(ref, { ...input, clientId: connection.clientId, ...(connection.clientName ? { clientName: connection.clientName } : {}), status: 'pending', createdAt: Timestamp.fromMillis(this.now()), expiresAt: connection.expiresAt });
+      tx.create(referenceRef, { expiresAt: connection.expiresAt });
+      return 'created';
+    });
+  }
+  async confirmationFor(id: string, userId: string): Promise<ConfirmationView | undefined> {
+    return this.db.runTransaction(async tx => {
+      const confirmation = await this.readConfirmation(tx, id);
+      if (!confirmation || confirmation.subject !== userId) return undefined;
+      if (confirmation.status === 'denied') return { state: 'denied', confirmation };
+      if (confirmation.status !== 'pending' && confirmation.status !== 'approved') return { state: 'invalid', confirmation };
+      const active = await this.activeConnection(tx, confirmation.connectionId, confirmation.subject);
+      return { state: active ? confirmation.status : 'invalid', confirmation };
+    });
+  }
+  async decideConfirmation(id: string, userId: string, decision: 'approve' | 'deny'): Promise<'approved' | 'denied' | 'invalid'> {
+    return this.db.runTransaction(async tx => {
+      const confirmation = await this.readConfirmation(tx, id);
+      if (!confirmation || confirmation.subject !== userId || confirmation.status !== 'pending') return 'invalid';
+      if (!await this.activeConnection(tx, confirmation.connectionId, confirmation.subject)) return 'invalid';
+      const decidedAt = Timestamp.fromMillis(this.now());
+      if (decision === 'approve') {
+        tx.update(this.confirmation(id), { status: 'approved', decidedAt });
+        return 'approved';
+      }
+      tx.update(this.confirmation(id), { status: 'denied', decidedAt, summary: FieldValue.delete() });
+      return 'denied';
+    });
+  }
+  async consumeConfirmation(id: string, resourceClientId: string, reference: string, changeHash: string): Promise<ConsumeResult> {
+    return this.db.runTransaction(async tx => {
+      const confirmation = await this.readConfirmation(tx, id);
+      // Another resource, reference or change receives the same answer as a missing record.
+      if (!confirmation || confirmation.resourceClientId !== resourceClientId || confirmation.reference !== reference || confirmation.changeHash !== changeHash || confirmation.status === 'cancelled') return { status: 'expired' };
+      if (confirmation.status === 'denied' || confirmation.status === 'used') return { status: confirmation.status };
+      if (!await this.activeConnection(tx, confirmation.connectionId, confirmation.subject)) return { status: 'expired' };
+      if (confirmation.status === 'pending') return { status: 'pending' };
+      tx.update(this.confirmation(id), { status: 'used', summary: FieldValue.delete() });
+      return { status: 'consumed', subject: confirmation.subject, connectionId: confirmation.connectionId, decidedAt: confirmation.decidedAt! };
+    });
+  }
+  async cancelConfirmation(id: string, resourceClientId: string, reference: string) {
+    await this.db.runTransaction(async tx => {
+      const confirmation = await this.readConfirmation(tx, id);
+      if (!confirmation || confirmation.resourceClientId !== resourceClientId || confirmation.reference !== reference || (confirmation.status !== 'pending' && confirmation.status !== 'approved')) return;
+      tx.update(this.confirmation(id), { status: 'cancelled', summary: FieldValue.delete() });
     });
   }
 }

@@ -64,7 +64,41 @@ Use Gate's `/.well-known/openid-configuration` to obtain registration, authoriza
 
 Resource services verify each Bearer token with `verifyToken` or `authenticate`. An ID token is an identity assertion, not an API access token. Refresh, authorization-code consumption and OAuth revocation remain owned by `oidc-provider`. Access and ID tokens have a configured lifetime of 300 seconds; authorization codes have 60 seconds, and grants/refresh tokens have a configured 30-day lifetime.
 
-OAuth connection approval is independent of the common browser device approval. The resource API must map the verified issuer/subject to an explicitly enabled internal user, without a static MCP-client allowlist. `verifyToken` requires a nonempty `client_id`; when `azp` is present it must match. `verifySession` additionally checks the configured browser client ID. Keep tokens in client-managed secure storage and keep introspection credentials only on the resource server.
+OAuth connection approval is independent of the common browser device approval. The resource API must map the verified issuer/subject to an explicitly enabled internal user, without a static MCP-client allowlist.
+
+### Identifying each AI client
+
+A verified `GatePrincipal` carries two client identifiers with different meanings:
+
+| Field | Identifies | Changes when |
+| --- | --- | --- |
+| `clientId` | One AI installation: one DCR registration | The client registers again, for example on another device or after losing its stored registration |
+| `connectionId` | One approval of that registration | The person approves the client again; revocation applies to one connection |
+
+A registration that is never approved expires after 24 hours; the first approval makes it permanent, so an approved `clientId` stays stable across token refreshes and later approvals. Gate never reuses a `clientId`. A resource API that needs per-AI attribution can key it on issuer, subject and `clientId`; access still follows the person's connection approval, not the client identity. Treat a new `clientId` as a new AI, and do not merge registrations by client name or redirect URI: names are unverified, and the same product on different devices registers identical metadata. A client that registers separately for each resource receives a separate `clientId` for each one. `verifyToken` requires a nonempty `client_id`; when `azp` is present it must match. `verifySession` additionally checks the configured browser client ID. Keep tokens in client-managed secure storage and keep introspection credentials only on the resource server.
+
+### Confirming a change
+
+Connection approval lets an AI use a resource; it does not show that the person wanted a particular change. When a change needs the person's own approval, the resource asks Gate for a change confirmation:
+
+1. Store the exact pending change, render a plain-text summary of every state-changing field from it, and compute a change hash that covers both. Never let the AI supply the summary.
+2. `POST /confirmations` with the resource's introspection credentials, the verified subject and `connectionId` of the requesting connection, a unique `reference` for the stored change, the hash and the summary. Give the returned `url` to the AI to show the person.
+3. When the AI reports back, `POST /confirmations/consume` with the same `id`, `reference` and hash, immediately before committing. Commit the stored change only on `consumed`, and only once. Treat `pending`, `denied`, `used` and `expired` as not approved.
+4. `POST /confirmations/cancel` when the stored change becomes invalid, for example after the data it shows is deleted.
+
+A confirmation stays valid while the requesting connection is active. If the resource's commit fails after `consumed`, the approval is spent and the person must approve again. The [HTTP interface](api.md#change-confirmations) defines the calls.
+
+`createGateConfirmations({ issuer, clientId, clientSecret })` wraps them with the resource's introspection credentials. It applies the same deadline, response-size limit and redirect refusal as the verifier:
+
+```ts
+const confirmations = createGateConfirmations({ issuer, clientId, clientSecret });
+const { id, url } = await confirmations.create({ subject, connectionId, reference, changeHash, summary });
+const result = await confirmations.consume(id, reference, changeHash);
+if (result.status === 'consumed') commitStoredChange();
+await confirmations.cancel(id, reference);
+```
+
+`create` fails with `GateError(401)` when the requesting connection is no longer active. Any other failure, including an unexpected status or a malformed response, is `GateError(503)`.
 
 ## Shared-cookie trust boundary
 

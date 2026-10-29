@@ -7,11 +7,11 @@ Gate serves its own login, approval and connection-management HTML. Application 
 ```mermaid
 flowchart LR
     Browser -->|Static application|SPA[Static SPA host]
-    Browser -->|Login and device approval|Gate[Gate on Cloud Run]
+    Browser -->|Login, approvals and change confirmation|Gate[Gate on Cloud Run]
     Browser -->|Shared HttpOnly cookie|API[Application API]
     MCP[MCP client] -->|Opaque Bearer token|API
     MCP -->|OAuth PKCE|Gate
-    API -->|Authenticated online introspection|Gate
+    API -->|Authenticated introspection and confirmations|Gate
     Gate -->|Verify immutable account ID|GitHub
     Gate -->|Transactions and revocation guards|Firestore
 ```
@@ -26,23 +26,29 @@ Browser applications register an `app_id` and exact HTTPS return URI. Gate valid
 
 Gate derives browser CORS origins from registered browser return URIs. Session bootstrap and logout accept only registered origins. Logout also validates CSRF, revokes the current device connection and deletes that browser session atomically. Management can revoke any browser or OAuth connection. Revocation never affects other devices or independent MCP grants.
 
-Registration accepts at most 8192 bytes, ten redirect URIs of at most 2048 characters each and a client name of at most 100 characters. Names are self-asserted and shown as unverified beside the actual redirect at approval. Inert unsupported metadata is omitted from persistence and display. Registration management and client-metadata-document discovery are disabled. Firestore transactions limit registrations to 1000 over the namespace lifetime and 20 per fixed minute across instances. These limits bound registration storage, not all request costs; exhaustion can deny new registrations and requires operator intervention. Existing approved connections remain independently usable.
+Registration accepts at most 8192 bytes, ten redirect URIs of at most 2048 characters each and a client name of at most 100 characters. Names are self-asserted and shown as unverified beside the actual redirect at approval. Inert unsupported metadata is omitted from persistence and display. Registration management and client-metadata-document discovery are disabled. A new registration is pending for 24 hours. The first approved connection removes its expiry in the same Firestore transaction that creates the connection, so the registration becomes permanent; an unapproved registration stops resolving after 24 hours and Firestore TTL deletes it. Firestore transactions limit registrations to 1000 per fixed 24-hour window and 20 per fixed minute across instances. These limits bound pending registration storage, not all request costs; exhaustion denies new registrations until the window ends. Existing approved connections remain independently usable.
 
-See [identity and registration controls](docs/security.md) for the exact GitHub account check, public-client registration limits and operator-only resource/browser registrations. Gate does not maintain an MCP tool registry.
+Each DCR registration is one AI installation. Its `client_id` stays the same across that client's approvals, token refreshes and reconnections, and is never reused. A client on another device, or a client that registers again, receives a different `client_id`. Each approval creates a separate `connection_id`, which is the unit of revocation. Resource servers may key per-AI state on issuer, subject and `client_id`.
+
+A resource can ask the person to approve one exact change. `src/confirmation.ts` validates the resource's request, and the resource-authenticated `/confirmations` endpoints create, consume and cancel confirmations. The person decides on Gate's `/confirm` page after identity login. Gate stores the resource-rendered summary and change hash, shows the summary escaped and in full, and records the decision; it never interprets or applies the change. A confirmation is valid while the requesting OAuth connection is active, and an approval is consumed once, by its own resource, in one transaction.
+
+See [identity and registration controls](docs/security.md) for the exact GitHub account check, public-client registration limits, change confirmations and operator-only resource/browser registrations. Gate does not maintain an MCP tool registry.
 
 ## Persistence and authorization
 
 | Firestore collection | Contents and retention |
 | --- | --- |
-| `gate_artifacts/<hashed model>/entries` | Hashed identifiers and payloads; durable DCR Client records and expiring protocol artifacts |
-| `gate_dcr_state` | Transactional lifetime registration quota and fixed-minute rate counters shared across instances; no TTL |
+| `gate_artifacts/<hashed model>/entries` | Hashed identifiers and payloads; DCR Client records (pending for 24 hours, permanent after the first approval) and expiring protocol artifacts |
+| `gate_dcr_state` | Transactional fixed 24-hour capacity and fixed-minute rate counters shared across instances; no TTL |
 | `gate_identity_sessions` | Host-only identity login sessions; 24-hour expiry |
 | `gate_browser_login_attempts` | Browser-bound single-use login state; 10-minute expiry |
 | `gate_browser_approvals` | Bound approval transactions; 10-minute expiry and consumed marker |
 | `gate_browser_sessions` | Approved device sessions keyed by hashed session secret; fixed configured expiry |
 | `gate_connections` | Browser/OAuth connection records and durable revocation guards; no TTL |
+| `gate_confirmations` | Change confirmations keyed by hashed ID: resource, subject, connection, reference, change hash, status and a summary kept only until a decision, consumption or cancellation; expire with the requesting connection's grant |
+| `gate_confirmation_references` | One marker per resource and reference, keyed by hash, that keeps references unique; same expiry as its confirmation |
 
-Queries by UID/user code use a single-field equality filter within a model collection. Listing connections filters on user ID, then sorts and excludes revoked records in application code. No composite query indexes are required. TTL policies cover `expiresAt` for expiring records, including the `entries` collection group. DCR Client records have no `expiresAt` and are not expired by that policy. Read-time expiry checks determine authorization independently of asynchronous cleanup.
+Queries by UID/user code use a single-field equality filter within a model collection. Listing connections filters on user ID, then sorts and excludes revoked records in application code. No composite query indexes are required. TTL policies cover `expiresAt` for expiring records, including the `entries` collection group. Pending DCR Client records carry `expiresAt` and are removed by that policy. Approved Client records, and records created before pending expiry was introduced, have no `expiresAt` and are kept. Confirmation records and their reference markers carry the requesting grant's expiry and have their own TTL policies. Read-time expiry checks determine authorization independently of asynchronous cleanup; a confirmation is additionally checked against its connection's current state.
 
 Authorization-code and refresh-token consumption transactionally checks expiry, grant revocation and the existing consumed marker before setting it. A second consumption cannot succeed. Artifact upserts preserve consumed markers. OIDC login state is single-use. Browser approval state is bound to both login cookie and verified identity, expires independently and is consumed with session and connection creation in one transaction.
 

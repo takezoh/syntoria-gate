@@ -71,6 +71,20 @@ resource "google_firestore_field" "identity_session_ttl" {
   field      = "expiresAt"
   ttl_config {}
 }
+resource "google_firestore_field" "confirmation_ttl" {
+  project    = "example-project"
+  database   = google_firestore_database.gate.name
+  collection = "gate_confirmations"
+  field      = "expiresAt"
+  ttl_config {}
+}
+resource "google_firestore_field" "confirmation_reference_ttl" {
+  project    = "example-project"
+  database   = google_firestore_database.gate.name
+  collection = "gate_confirmation_references"
+  field      = "expiresAt"
+  ttl_config {}
+}
 resource "google_artifact_registry_repository" "gate" {
   project       = "example-project"
   location      = "asia-southeast1"

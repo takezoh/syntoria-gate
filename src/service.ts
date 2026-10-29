@@ -5,6 +5,8 @@ import type { Storage } from './storage.js';
 import type { Config } from './config.js';
 import { adapter } from './storage.js';
 import { InvalidDcrMetadataError, parseDcrMetadata, REGISTRATION_BODY_LIMIT } from './registration.js';
+import { CONFIRMATION_BODY_LIMIT, InvalidConfirmationError, isConfirmationId, parseCancelRequest, parseConfirmationRequest, parseConsumeRequest } from './confirmation.js';
+import type { Confirmation } from './storage.js';
 
 const random=()=>randomBytes(32).toString('base64url');
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
@@ -49,11 +51,27 @@ function authCookies(req:IncomingMessage) {
 
 function encode(value:string) {return encodeURIComponent(value).replace(/[!'()*]/g,char=>`%${char.charCodeAt(0).toString(16).toUpperCase()}`).replace(/%20/g,'+');}
 
-function page(res:ServerResponse,title:string,body:string,formActionOrigin?:string) {
+// One stylesheet for every page. The CSP admits it by hash, so pages load nothing else and need no inline style attributes.
+const PAGE_STYLE=`*{box-sizing:border-box}body{margin:0;background:#F6F6F3;color:#1C1D1F;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:#2346B8}a:hover{color:#18307F}.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px;background:#FFFFFF;border-bottom:1px solid #DADBD6}.brand{display:flex;align-items:center;gap:8px;font-weight:600}.who{font-size:13px;color:#5B5F66}main{max-width:560px;margin:0 auto;padding:32px 20px;display:flex;flex-direction:column;gap:20px}h1{margin:0;font-size:26px;line-height:1.25;font-weight:600}h2{margin:0;font-size:17px;font-weight:600}p{margin:0}form{margin:0}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}.lead{color:#3A3D42}.muted{font-size:14px;color:#5B5F66}.facts{margin:0;display:flex;flex-direction:column;gap:10px;font-size:14px}.facts div{display:flex;gap:12px}.facts dt{width:84px;flex-shrink:0;color:#5B5F66}.facts dd{margin:0;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px;overflow-wrap:anywhere}.tag{font-size:12px;padding:2px 8px;border-radius:999px;background:#FFF1D6;color:#7A4B00}.card{background:#FFFFFF;border:1px solid #DADBD6;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}.card.row{flex-direction:row;align-items:center;gap:12px}.grow{flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:4px}.name{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-weight:600;overflow-wrap:anywhere}.label,.eyebrow{margin:0;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#5B5F66;font-weight:500}.lines{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:14px;overflow-wrap:anywhere}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#5B5F66}section{display:flex;flex-direction:column;gap:10px}.actions{display:flex;flex-direction:column;gap:10px}button,.button{min-height:48px;padding:0 16px;border-radius:10px;font:inherit;font-weight:600;cursor:pointer}.primary{border:0;background:#2346B8;color:#FFFFFF}.secondary{border:1px solid #B9BBB5;background:#FFFFFF;color:#1C1D1F}.danger{min-height:44px;border:1px solid #D9A39C;background:#FFFFFF;color:#A1271B;font-weight:500}.button{display:flex;align-items:center;justify-content:center;text-decoration:none;background:#1C1D1F;color:#FFFFFF}.button:hover{color:#FFFFFF}.icon{width:52px;height:52px;border-radius:26px;display:flex;align-items:center;justify-content:center}.ok{background:#DDEEDF}.no{background:#E7E8E3}.warn{background:#FFF1D6}footer{max-width:560px;margin:0 auto;padding:14px 20px;border-top:1px solid #DADBD6;display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#5B5F66}`;
+const PAGE_STYLE_SOURCE=`'sha256-${createHash('sha256').update(PAGE_STYLE).digest('base64')}'`;
+const SHIELD='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1C1D1F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/></svg>';
+const ICONS={
+  ok:'<div class="icon ok"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#1E6B3A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>',
+  no:'<div class="icon no"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3A3D42" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10"/><path d="M17 7L7 17"/></svg></div>',
+  warn:'<div class="icon warn"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7A4B00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5"/><path d="M12 16.2v0.1"/></svg></div>',
+};
+
+interface PageOptions { status?: number; account?: string; lead?: string; footer?: string }
+
+function page(res:ServerResponse,title:string,body:string,formActionOrigin?:string,options:PageOptions={}) {
   const formAction=formActionOrigin?`'self' ${formActionOrigin}`:"'self'";
-  res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':`default-src 'none'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,'x-content-type-options':'nosniff'});
-  res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><title>${title}</title><body><h1>${title}</h1>${body}</body></html>`);
+  res.writeHead(options.status??200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':`default-src 'none'; style-src ${PAGE_STYLE_SOURCE}; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,'x-content-type-options':'nosniff'});
+  const account=options.account?`<span class="who">${escape(options.account)}</span>`:'';
+  res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${PAGE_STYLE}</style><body><header class="bar"><span class="brand">${SHIELD}Gate</span>${account}</header><main>${options.lead??''}<h1>${title}</h1>${body}</main>${options.footer??''}</body></html>`);
 }
+
+const utc=(value:{toDate():Date})=>`${value.toDate().toISOString().slice(0,16).replace('T',' ')} UTC`;
+const shortId=(value:string)=>value.length>12?`${value.slice(0,4)}…${value.slice(-4)}`:value;
 
 function json(res:ServerResponse,status:number,value:unknown) {
   res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});
@@ -82,11 +100,12 @@ async function form(req:IncomingMessage) {
   return new URLSearchParams(await body(req));
 }
 
-async function jsonBody(req:IncomingMessage) {
+async function jsonBody(req:IncomingMessage,limit=8192) {
   const type=oneHeader(req,'content-type')?.split(';',1)[0]?.trim().toLowerCase();
   if(type!=='application/json')throw new HttpFailure(400);
+  const raw=await body(req,limit);
   let value:unknown;
-  try {value=JSON.parse(await body(req));} catch {throw new HttpFailure(400);}
+  try {value=JSON.parse(raw);} catch {throw new HttpFailure(400);}
   if(typeof value!=='object'||value===null||Array.isArray(value))throw new HttpFailure(400);
   return value as Record<string,unknown>;
 }
@@ -223,10 +242,10 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     const value=cookie(req,SESSION_COOKIE);
     return value?storage.browser(value):undefined;
   }
-  async function startIdentityLogin(res:ServerResponse,interaction?:string) {
+  async function startIdentityLogin(res:ServerResponse,interaction?:string,confirmation?:string) {
     const state=random(),binding=random();
     setCookies(res,[loginCookie(binding)]);
-    await storage.saveLogin(hash(state),{binding:hash(binding),...(interaction?{interaction}:{})});
+    await storage.saveLogin(hash(state),{binding:hash(binding),...(interaction?{interaction}:{}),...(confirmation?{confirmation}:{})});
     const target=new URL('https://github.com/login/oauth/authorize');
     target.search=new URLSearchParams({client_id:config.githubClientId,redirect_uri:`${config.issuer}/github/callback`,state}).toString();
     res.writeHead(303,{location:target.href,'cache-control':'no-store'});res.end();
@@ -266,7 +285,7 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     if(!identitySession||!cookies.binding)throw new HttpFailure(401);
     const approval=await storage.browserApproval(ids[0]!,cookies.binding,identitySession.userId);
     if(!approval)throw new HttpFailure(403);
-    const body=`<p>${escape(approval.appName)} requested a shared browser session.</p><p>Approving creates a device connection with full access to registered suite resources. Device: ${escape(approval.deviceLabel)}.</p><form method="post"><input type="hidden" name="transaction" value="${escape(ids[0]!)}"><input type="hidden" name="csrf" value="${escape(approval.csrf)}"><button name="decision" value="approve">Approve this device</button><button name="decision" value="deny">Deny</button></form>`;
+    const body=`<p>${escape(approval.appName)} requested a shared browser session.</p><p>Approving creates a device connection with full access to registered suite resources. Device: ${escape(approval.deviceLabel)}.</p><form method="post" class="actions"><input type="hidden" name="transaction" value="${escape(ids[0]!)}"><input type="hidden" name="csrf" value="${escape(approval.csrf)}"><button class="primary" name="decision" value="approve">Approve this device</button><button class="secondary" name="decision" value="deny">Deny</button></form>`;
     const redirectOrigin=new URL(approval.redirectUri).origin;
     page(res,'Approve device',body,redirectOrigin);
   }
@@ -330,6 +349,101 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     res.writeHead(204,{'cache-control':'no-store','set-cookie':clearSessionCookie(config)});res.end();
   }
 
+  const account=`GitHub user ${config.githubUserId}`;
+  const signedInFooter='<footer><span>Signed in</span><a href="/connections">Connections</a></footer>';
+  function resourceLabel(confirmation:Confirmation) {
+    const audience=new URL(confirmation.audience);
+    return {host:audience.host,target:`${audience.host}${audience.pathname==='/'?'':audience.pathname}`};
+  }
+  const requester=(confirmation:Confirmation)=>escape(confirmation.clientName??'No name supplied');
+  function invalidConfirmationPage(res:ServerResponse,status:number) {
+    page(res,'This request is no longer valid','<p class="lead">It was already used or cancelled, or the AI\'s connection to Gate ended. Nothing was changed.</p><p class="lead">If you still want this change, ask your AI to request it again.</p>',undefined,{status,lead:ICONS.warn});
+  }
+  function confirmationPage(res:ServerResponse,id:string,confirmation:Confirmation,csrf:string) {
+    const resource=resourceLabel(confirmation);
+    const summary=confirmation.summary!;
+    const body=`<dl class="facts"><div><dt>From</dt><dd><strong>${requester(confirmation)}</strong><span class="tag">Unverified name</span></dd></div><div><dt>To</dt><dd>${escape(resource.target)}</dd></div><div><dt>Requested</dt><dd>${utc(confirmation.createdAt)}</dd></div></dl>`+
+      `<section class="card" aria-labelledby="change-title"><p class="eyebrow">Change described by ${escape(resource.host)}</p><h2 id="change-title">${escape(summary.title)}</h2><ul class="lines">${summary.lines.map(line=>`<li>${escape(line)}</li>`).join('')}</ul></section>`+
+      '<p class="lead">Approving lets this service apply exactly this change as you. Approve only if you asked for it.</p>'+
+      `<form method="post" action="/confirm" class="actions"><input type="hidden" name="id" value="${escape(id)}"><input type="hidden" name="csrf" value="${escape(csrf)}"><button class="primary" name="decision" value="approve">Approve</button><button class="secondary" name="decision" value="deny">Deny</button></form>`;
+    page(res,'Approve a change',body,undefined,{account,footer:signedInFooter});
+  }
+  function approvedPage(res:ServerResponse,confirmation:Confirmation) {
+    const body='<p class="lead">Nothing has changed yet. Return to your AI and tell it you approved. It will then apply exactly this change.</p>'+
+      `<div class="card"><p class="eyebrow">Approved change</p><h2>${escape(confirmation.summary?.title??'Change')}</h2><p class="muted">From ${requester(confirmation)} · ${utc(confirmation.decidedAt??confirmation.createdAt)}</p></div>`+
+      '<p class="muted">You can close this page. To withdraw access from this AI, revoke it in <a href="/connections">Connections</a>.</p>';
+    page(res,'Approved',body,undefined,{account,lead:ICONS.ok});
+  }
+  function deniedPage(res:ServerResponse,confirmation:Confirmation) {
+    const body='<p class="lead">Nothing was changed. Your AI will see that you denied this request when it checks.</p>'+
+      `<div class="card"><p class="eyebrow">Denied request</p><p class="muted">From ${requester(confirmation)} · ${utc(confirmation.decidedAt??confirmation.createdAt)}</p></div>`+
+      '<p class="muted">If you did not expect this request, review the AI in <a href="/connections">Connections</a> and revoke it.</p>';
+    page(res,'Denied',body,undefined,{account,lead:ICONS.no});
+  }
+  async function showConfirmation(req:IncomingMessage,res:ServerResponse,url:URL) {
+    const ids=url.searchParams.getAll('id'),id=ids[0];
+    if(ids.length!==1||url.searchParams.size!==1||!isConfirmationId(id)) {invalidConfirmationPage(res,404);return;}
+    authCookies(req);
+    const identitySession=await currentIdentity(req);
+    if(!identitySession) {
+      // The same page is shown for any well-formed ID, so it reveals nothing before sign-in.
+      page(res,'Sign in to continue',`<p class="lead">A change is waiting for your approval. Only the account that owns this Gate can approve it.</p><a class="button" href="/confirm/sign-in?id=${id}">Continue with GitHub</a><p class="muted">You stay signed in on this browser for 24 hours.</p>`);
+      return;
+    }
+    const view=await storage.confirmationFor(id,identitySession.userId);
+    if(!view) {invalidConfirmationPage(res,404);return;}
+    if(view.state==='pending')confirmationPage(res,id,view.confirmation,identitySession.csrf);
+    else if(view.state==='approved')approvedPage(res,view.confirmation);
+    else if(view.state==='denied')deniedPage(res,view.confirmation);
+    else invalidConfirmationPage(res,200);
+  }
+  async function confirmationSignIn(req:IncomingMessage,res:ServerResponse,url:URL) {
+    const ids=url.searchParams.getAll('id'),id=ids[0];
+    if(ids.length!==1||url.searchParams.size!==1||!isConfirmationId(id))throw new HttpFailure(400);
+    authCookies(req);
+    if(await currentIdentity(req)) {res.writeHead(303,{location:`/confirm?id=${id}`,'cache-control':'no-store'});res.end();return;}
+    await startIdentityLogin(res,undefined,id);
+  }
+  async function decideConfirmation(req:IncomingMessage,res:ServerResponse) {
+    const origin=oneHeader(req,'origin'),cookies=authCookies(req);
+    const identitySession=cookies.identity?await storage.identity(cookies.identity):undefined;
+    const values=await form(req);
+    if(values.getAll('id').length!==1||values.getAll('csrf').length!==1||values.getAll('decision').length!==1||[...values.keys()].some(key=>!['id','csrf','decision'].includes(key)))throw new HttpFailure(400);
+    const id=values.get('id')!,decision=values.get('decision');
+    if(!isConfirmationId(id)||(decision!=='approve'&&decision!=='deny'))throw new HttpFailure(400);
+    if(!identitySession||origin!==config.issuer||!equal(identitySession.csrf,values.get('csrf')!))throw new HttpFailure(403);
+    if(await storage.decideConfirmation(id,identitySession.userId,decision)==='invalid') {invalidConfirmationPage(res,409);return;}
+    res.writeHead(303,{location:`/confirm?id=${id}`,'cache-control':'no-store'});res.end();
+  }
+  async function confirmationApi(req:IncomingMessage,res:ServerResponse,path:string) {
+    const resource=registeredResource(req,config);
+    if(!resource) {jsonFailure(res,401);return;}
+    const request=await jsonBody(req,CONFIRMATION_BODY_LIMIT);
+    try {
+      if(path==='/confirmations') {
+        const input=parseConfirmationRequest(request);
+        if(input.subject!==accountId) {jsonFailure(res,403);return;}
+        const id=random();
+        const result=await storage.createConfirmation(id,{resourceClientId:resource.client_id,audience:resource.audience,subject:input.subject,connectionId:input.connection_id,reference:input.reference,changeHash:input.change_hash,summary:input.summary});
+        if(result==='inactive') {jsonFailure(res,403);return;}
+        if(result==='duplicate') {json(res,409,{error:'duplicate_reference'});return;}
+        json(res,201,{id,url:`${config.issuer}/confirm?id=${id}`});return;
+      }
+      if(path==='/confirmations/consume') {
+        const input=parseConsumeRequest(request);
+        const result=await storage.consumeConfirmation(input.id,resource.client_id,input.reference,input.change_hash);
+        if(result.status!=='consumed') {json(res,200,{status:result.status});return;}
+        json(res,200,{status:'consumed',subject:result.subject,connection_id:result.connectionId,decided_at:Math.floor(result.decidedAt.toMillis()/1000)});return;
+      }
+      const input=parseCancelRequest(request);
+      await storage.cancelConfirmation(input.id,resource.client_id,input.reference);
+      res.writeHead(204,{'cache-control':'no-store'});res.end();
+    } catch(error) {
+      if(error instanceof InvalidConfirmationError) {jsonFailure(res,400);return;}
+      throw error;
+    }
+  }
+
   async function handler(req:IncomingMessage,res:ServerResponse) {
     let path='';
     try {
@@ -353,6 +467,10 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
       if(path==='/browser/session'&&req.method==='GET'){await browserSession(req,res);return;}
       if(path==='/browser/logout'&&req.method==='POST'){await browserLogout(req,res);return;}
       if(path.startsWith('/browser/')){res.writeHead(404,{'cache-control':'no-store'});res.end('Not found');return;}
+      if(req.method==='POST'&&(path==='/confirmations'||path==='/confirmations/consume'||path==='/confirmations/cancel')){await confirmationApi(req,res,path);return;}
+      if(path==='/confirm'&&req.method==='GET'){await showConfirmation(req,res,url);return;}
+      if(path==='/confirm'&&req.method==='POST'){await decideConfirmation(req,res);return;}
+      if(path==='/confirm/sign-in'&&req.method==='GET'){await confirmationSignIn(req,res,url);return;}
       if(path==='/github/callback'&&req.method==='GET') {
         const states=url.searchParams.getAll('state'),codes=url.searchParams.getAll('code');
         if(states.length!==1||codes.length!==1)throw new HttpFailure(400);
@@ -360,11 +478,11 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
         if(!binding)throw new HttpFailure(400);
         const state=states[0]!,code=codes[0]!;
         const browserAttempt=await storage.takeBrowserLogin(state,binding);
-        let interaction:string|undefined;
+        let interaction:string|undefined,confirmation:string|undefined;
         if(!browserAttempt) {
           const saved=await storage.takeLogin(hash(state),hash(binding));
           if(!saved)throw new HttpFailure(400);
-          interaction=saved.interaction;
+          interaction=saved.interaction;confirmation=saved.confirmation;
         }
         const user=await identity.exchange(code);
         if(user!==config.githubUserId){res.writeHead(403,{'cache-control':'no-store'});res.end('Account not allowed');return;}
@@ -377,7 +495,7 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
           res.writeHead(303,{location:`/browser/approve?transaction=${encodeURIComponent(transaction)}`,'cache-control':'no-store'});res.end();return;
         }
         setCookies(res,[identityCookie(identitySecret),clearLoginCookie()]);
-        const destination=interaction?`/interaction/${encodeURIComponent(interaction)}`:'/connections';
+        const destination=interaction?`/interaction/${encodeURIComponent(interaction)}`:confirmation&&isConfirmationId(confirmation)?`/confirm?id=${confirmation}`:'/connections';
         res.writeHead(303,{location:destination,'cache-control':'no-store'});res.end();return;
       }
       if(path==='/login'&&req.method==='GET'){
@@ -389,7 +507,14 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
         authCookies(req);
         const s=await currentIdentity(req);if(!s){res.writeHead(303,{location:'/login','cache-control':'no-store'});res.end();return;}
         const rows=await storage.listConnections(accountId);
-        page(res,'Connections',rows.map(r=>`<p>${escape(r.kind==='browser'?(r.deviceLabel??'This browser'):`Unverified OAuth client: ${r.clientName??r.clientId}`)} — ${escape(r.createdAt)}</p><form method="post" action="/connections/revoke"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><input type="hidden" name="id" value="${escape(r.id)}"><button>Revoke connection</button></form>`).join('')||'<p>No connections.</p>');return;
+        const current=await currentBrowser(req);
+        const revoke=(id:string)=>`<form method="post" action="/connections/revoke"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><input type="hidden" name="id" value="${escape(id)}"><button class="danger">Revoke</button></form>`;
+        const approved=(createdAt:string)=>`Approved ${escape(createdAt.slice(0,10))}`;
+        const clients=rows.filter(r=>r.kind!=='browser').map(r=>`<div class="card row"><div class="grow"><span class="name">${escape(r.clientName??'No name supplied')}<span class="tag">Unverified name</span></span><span class="mono">client ${escape(shortId(r.clientId))}</span><span class="muted">${approved(r.createdAt)}</span></div>${revoke(r.id)}</div>`);
+        const browsers=rows.filter(r=>r.kind==='browser').map(r=>`<div class="card row"><div class="grow"><span class="name">${escape(r.deviceLabel??'This browser')}</span><span class="muted">${current?.connectionId===r.id?'This browser · ':''}${approved(r.createdAt)}</span></div>${revoke(r.id)}</div>`);
+        const section=(id:string,label:string,cards:string[])=>cards.length?`<section aria-labelledby="${id}"><h2 id="${id}" class="label">${label}</h2>${cards.join('')}</section>`:'';
+        const body='<p class="lead">AIs and browsers that can use your services. Revoking stops access at their next request.</p>'+(rows.length?section('ai-clients','AI clients',clients)+section('browsers','Browsers',browsers):'<p class="muted">No connections.</p>');
+        page(res,'Connections',body,undefined,{account});return;
       }
       if(path==='/connections/revoke'&&req.method==='POST') {
         const origin=oneHeader(req,'origin'),cookies=authCookies(req),s=cookies.identity?await storage.identity(cookies.identity):undefined,bodyValues=await form(req);
@@ -420,7 +545,7 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
           const redirectOrigin=registeredRedirectOrigin(client,redirectUri);
           if(!client||client.tokenEndpointAuthMethod!=='none'||!client.grantTypeAllowed('authorization_code')||!redirectOrigin||typeof redirectUri!=='string')throw new HttpFailure(403);
           const name=client.clientName??'No name supplied';
-          page(res,'Approve connection',`<p>Unverified client name: ${escape(name)}</p><p>Redirect URI: <code>${escape(redirectUri)}</code></p><p>Approving gives this client access to the registered Gate resources.</p><form method="post"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></form>`,redirectOrigin);return;
+          page(res,'Approve connection',`<p>Unverified client name: ${escape(name)}</p><p>Redirect URI: <code>${escape(redirectUri)}</code></p><p>Approving gives this client access to the registered Gate resources.</p><form method="post" class="actions"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><button class="primary" name="decision" value="approve">Approve</button><button class="secondary" name="decision" value="deny">Deny</button></form>`,redirectOrigin,{account});return;
         }
         if(req.method==='POST') {
           const values=await form(req);
@@ -443,11 +568,11 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     } catch(error) {
       if(res.headersSent){res.end();return;}
       if(error instanceof HttpFailure) {
-        if(path==='/browser/session'||path==='/browser/logout')jsonFailure(res,error.status);
+        if(path==='/browser/session'||path==='/browser/logout'||path.startsWith('/confirmations'))jsonFailure(res,error.status);
         else {res.writeHead(error.status,{'cache-control':'no-store'});res.end(error.status===401?'Unauthorized':error.status===403?'Forbidden':'Request failed');}
         return;
       }
-      if(path.startsWith('/browser/')) {jsonFailure(res,503);return;}
+      if(path.startsWith('/browser/')||path.startsWith('/confirmations')) {jsonFailure(res,503);return;}
       res.writeHead(400,{'cache-control':'no-store'});res.end('Request failed');
     }
   }

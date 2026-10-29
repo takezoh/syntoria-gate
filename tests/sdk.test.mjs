@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { createGateVerifier, GateError, protectedResourceMetadata } from '../packages/sdk/dist/index.js';
+import { createGateConfirmations, createGateVerifier, GateError, protectedResourceMetadata } from '../packages/sdk/dist/index.js';
 
 const issuer = 'https://gate.example/realms/syntoria';
 const endpoint = `${issuer}/protocol/openid-connect/token/introspect`;
@@ -257,4 +257,67 @@ test('refresh tokens and browser session identifiers are not access credentials'
   for (const change of [{token_type:undefined},{token_type:'refresh_token'},{connection_id:undefined,sid:'browser-session'}]) {
     await assert.rejects(fixture(active(change)).verifier.verifyToken('token'), status(401));
   }
+});
+
+const confirmationId = 'C'.repeat(43);
+const confirmationHash = 'sha256:' + 'b'.repeat(64);
+const confirmationRequest = { subject: 'github:12345', connectionId: 'connection-a', reference: 'lore-1', changeHash: confirmationHash, summary: { title: 'Forget a memory', lines: ['Memory: example'] } };
+function confirmations(result, options = {}) {
+  const calls = [];
+  const fetch = async (url, init) => { calls.push({ url, init }); return typeof result === 'function' ? result(url, init) : result; };
+  return { calls, client: createGateConfirmations({ issuer, clientId: config.clientId, clientSecret: config.clientSecret, ...options }, { fetch }) };
+}
+
+test('confirmations: create sends the exact contract with resource credentials', async () => {
+  const { calls, client } = confirmations(json({ id: confirmationId, url: `${issuer}/confirm?id=${confirmationId}` }, { status: 201 }));
+  const created = await client.create(confirmationRequest);
+  assert.deepEqual(created, { id: confirmationId, url: `${issuer}/confirm?id=${confirmationId}` });
+  assert.ok(Object.isFrozen(created));
+  assert.equal(calls[0].url, `${issuer}/confirmations`);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.redirect, 'error');
+  assert.equal(calls[0].init.headers.authorization, `Basic ${Buffer.from('resource:secret').toString('base64')}`);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { subject: 'github:12345', connection_id: 'connection-a', reference: 'lore-1', change_hash: confirmationHash, summary: { title: 'Forget a memory', lines: ['Memory: example'] } });
+});
+
+test('confirmations: create rejects a foreign URL or malformed ID and maps an inactive connection to 401', async () => {
+  for (const body of [{ id: confirmationId, url: `https://evil.example/confirm?id=${confirmationId}` }, { id: 'short', url: `${issuer}/confirm?id=short` }, { id: confirmationId }]) {
+    await assert.rejects(confirmations(json(body, { status: 201 })).client.create(confirmationRequest), status(503));
+  }
+  await assert.rejects(confirmations(json({ error: 'forbidden' }, { status: 403 })).client.create(confirmationRequest), status(401));
+  for (const code of [200, 400, 401, 409, 413, 500, 503]) {
+    await assert.rejects(confirmations(json({ id: confirmationId, url: `${issuer}/confirm?id=${confirmationId}` }, { status: code })).client.create(confirmationRequest), status(503));
+  }
+});
+
+test('confirmations: consume returns only well-formed results', async () => {
+  const consumed = await confirmations(json({ status: 'consumed', subject: 'github:12345', connection_id: 'connection-a', decided_at: 1_700_000_000 })).client.consume(confirmationId, 'lore-1', confirmationHash);
+  assert.deepEqual(consumed, { status: 'consumed', subject: 'github:12345', connectionId: 'connection-a', decidedAt: 1_700_000_000 });
+  for (const value of ['pending', 'denied', 'used', 'expired']) {
+    assert.deepEqual(await confirmations(json({ status: value })).client.consume(confirmationId, 'lore-1', confirmationHash), { status: value });
+  }
+  for (const body of [{ status: 'approved' }, { status: 'consumed', subject: 'github:12345', connection_id: 'connection-a' }, { status: 'consumed', subject: '', connection_id: 'connection-a', decided_at: 1 }, {}]) {
+    await assert.rejects(confirmations(json(body)).client.consume(confirmationId, 'lore-1', confirmationHash), status(503));
+  }
+  const { calls, client } = confirmations(json({ status: 'pending' }));
+  await client.consume(confirmationId, 'lore-1', confirmationHash);
+  assert.equal(calls[0].url, `${issuer}/confirmations/consume`);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { id: confirmationId, reference: 'lore-1', change_hash: confirmationHash });
+});
+
+test('confirmations: cancel expects 204 and fails closed otherwise', async () => {
+  const { calls, client } = confirmations(new Response(null, { status: 204 }));
+  await client.cancel(confirmationId, 'lore-1');
+  assert.equal(calls[0].url, `${issuer}/confirmations/cancel`);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { id: confirmationId, reference: 'lore-1' });
+  await assert.rejects(confirmations(json({}, { status: 200 })).client.cancel(confirmationId, 'lore-1'), status(503));
+  await assert.rejects(confirmations(async () => { throw new Error('network'); }).client.cancel(confirmationId, 'lore-1'), status(503));
+});
+
+test('confirmations: one deadline bounds each call and loopback HTTP stays test-only', async () => {
+  const slow = confirmations(() => new Promise(() => {}), { timeoutMs: 15 });
+  await assert.rejects(slow.client.consume(confirmationId, 'lore-1', confirmationHash), status(503));
+  assert.throws(() => createGateConfirmations({ issuer: 'http://gate.example', clientId: 'resource', clientSecret: 'secret' }), TypeError);
+  assert.throws(() => createGateConfirmations({ issuer, clientId: '', clientSecret: 'secret' }), TypeError);
+  assert.ok(createGateConfirmations({ issuer: 'http://127.0.0.1:1', clientId: 'resource', clientSecret: 'secret', allowLoopbackHttp: true }));
 });

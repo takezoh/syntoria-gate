@@ -33,7 +33,7 @@ MCP clients use the advertised DCR registration endpoint. Supply `redirect_uris`
 {"client_name":"Desktop","redirect_uris":["http://127.0.0.1:8080/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}
 ```
 
-Registration is public, while access requires the configured person's authentication and explicit connection approval. Client names are unverified metadata. Remote key, sector and request metadata is rejected; inert extras are omitted. Input is limited to 8192 bytes, ten redirects of at most 2048 characters and a name of at most 100 characters. The shared Firestore quota permits 1000 registrations over a namespace lifetime and 20 per fixed minute. There is no client-management API or automatic capacity reset.
+Registration is public, while access requires the configured person's authentication and explicit connection approval. Client names are unverified metadata. Remote key, sector and request metadata is rejected; inert extras are omitted. Input is limited to 8192 bytes, ten redirects of at most 2048 characters and a name of at most 100 characters. The shared Firestore limits permit 1000 registrations per fixed 24-hour window and 20 per fixed minute. A registration that receives no approved connection within 24 hours expires; the first approval makes it permanent. There is no client-management API.
 
 Browser apps use an `app_id`, `app_name` and exact HTTPS `redirect_uris` under the cookie parent. These app IDs are distinct from OAuth client IDs and resource verification credentials. Gate derives allowed browser CORS origins from these return URLs.
 
