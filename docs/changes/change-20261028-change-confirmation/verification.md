@@ -31,9 +31,9 @@ Terraform is not installed on this host, so the two new TTL resources were not f
 
 On 2026-10-29, source `c2d093b`, which also carries the pending-registration expiry change, was released as revision `gate-api-confirm-c2d093b` with image `sha256:38faebf473700eb6c5aa94ffa000735cb7e916509c9694d63875bdb48c6f9c3a` (OCI index, built with Docker Buildx for linux/amd64).
 
-- The revision reuses the serving configuration of the previous revision and changes only the image.
+- The revision reuses the serving configuration of the previous revision `gate-api-davinci-20261024` and changes only the image. Secret version references, runtime identity, Firestore identifiers and limits are unchanged. It was deployed with `gcloud run deploy --image --no-traffic --tag` because the ignored runtime config still carried a retired `clients` key, which the renderer rejects. The previous revision is kept for rollback.
 - Firestore TTL policies on `expiresAt` were added for `gate_confirmations` and `gate_confirmation_references`; both read back `ACTIVE`.
 - Before traffic moved, the candidate revision returned 200 for readiness and OIDC discovery, 401 for an unauthenticated confirmation create, and 404 for `/confirm` with an unknown ID.
 - After 100% traffic, the public origin returned 200 for readiness and 401 for an unauthenticated confirmation create.
 
-No real confirmation has been created, approved or consumed in production.
+No real confirmation has been created, approved or consumed in production. Lore began requesting confirmations for its single production binding on the same day, when its connection-principal switch was set.
