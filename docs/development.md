@@ -8,12 +8,13 @@ Use Node.js 24 and the npm version pinned in [package.json](../package.json). In
 | --- | --- |
 | `src/config.ts` | Environment and browser/resource registration validation |
 | `src/registration.ts` | Pure bounded DCR metadata projection and redirect validation |
-| `src/service.ts` | HTTP composition, GitHub exchange, OIDC, HTML pages, cookies and browser CORS/CSRF |
-| `src/storage.ts` | Firestore persistence, transactional approval, expiry and durable revocation |
+| `src/confirmation.ts` | Pure change-confirmation request and summary validation |
+| `src/service.ts` | HTTP composition, GitHub exchange, OIDC, HTML pages, change-confirmation endpoints, cookies and browser CORS/CSRF |
+| `src/storage.ts` | Firestore persistence, transactional approval, single confirmation consumption, expiry and durable revocation |
 | `src/main.ts` | Production configuration, storage composition and server startup |
-| `packages/sdk/src/index.ts` | Online token/session verification for Node resource services |
+| `packages/sdk/src/index.ts` | Online token/session verification and change-confirmation calls for Node resource services |
 | `scripts/` | Runtime rendering, emulator and test runners |
-| `tests/` | SDK/configuration/renderer/readiness checks and provider integration |
+| `tests/` | SDK/configuration/confirmation/renderer/readiness checks and provider integration |
 | `infra/` | Cloud Run template, synthetic runtime input and Terraform resources |
 
 Keep identity verification separate from application data admission. Do not add a request proxy, application data store or feature permission system to Gate. Preserve single-use login/approval records, transactional browser session creation and durable connection revocation guards.
@@ -25,7 +26,7 @@ Keep identity verification separate from application data admission. Do not add 
 | `npm ci` | Install the locked dependencies |
 | `npm run typecheck` | Check service and SDK TypeScript |
 | `npm run build` | Compile the service to `dist/` and SDK to `packages/sdk/dist/` |
-| `npm test` | Build, then run SDK, config, readiness and runtime-renderer tests |
+| `npm test` | Build, then run SDK, config, confirmation, readiness and runtime-renderer tests |
 | `npm run check` | Typecheck, then build and run those tests |
 | `npm run emulator` | Start the pinned Firestore Emulator container on loopback port 55435; requires Docker |
 | `FIRESTORE_EMULATOR_HOST=127.0.0.1:55435 npm run test:integration` | Build and run `tests/provider.test.mjs` against the emulator |

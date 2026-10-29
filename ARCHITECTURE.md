@@ -1,6 +1,6 @@
 # Architecture
 
-Gate is a personal identity and authorization service for a suite of applications. Node.js 24 and TypeScript host `oidc-provider`; the official Firestore SDK stores provider artifacts, identity state, browser approvals, browser sessions and device connections. GitHub supplies a stable numeric account identity for one configured user.
+Gate is a personal identity and authorization service for one person's suite of Syntoria applications. Node.js 24 and TypeScript host `oidc-provider`; the official Firestore SDK stores provider artifacts, identity state, browser approvals, browser sessions, device connections and change confirmations. GitHub supplies a stable numeric account identity for one configured user.
 
 Gate serves its own login, approval and connection-management HTML. Application SPAs are hosted separately and call their resource APIs directly. Gate is the identity and online authorization service, without a BFF or application request proxy. Cloudflare supplies authoritative DNS and application static hosting; the Gate service uses a DNS-only record and a standard Cloud Run domain mapping for its configured origin. The Cloud Run resource name does not determine the public hostname.
 
@@ -18,7 +18,7 @@ flowchart LR
 
 ## Responsibilities
 
-`src/config.ts` validates the HTTPS issuer, cookie parent, exact browser return URIs, resource credentials and explicit Firestore project/database identifiers. `src/service.ts` composes OIDC, GitHub identity, device approval, browser session endpoints and connection management. `src/storage.ts` implements provider persistence and transactional session creation, logout and revocation. `packages/sdk` performs fresh resource-authenticated verification for opaque OAuth tokens and shared browser sessions.
+`src/config.ts` validates the HTTPS issuer, cookie parent, exact browser return URIs, resource credentials and explicit Firestore project/database identifiers. `src/service.ts` composes OIDC, GitHub identity, device approval, browser session endpoints and connection management. `src/storage.ts` implements provider persistence and transactional session creation, logout and revocation. `packages/sdk` performs fresh resource-authenticated verification for opaque OAuth tokens and shared browser sessions, and wraps a resource's change-confirmation calls.
 
 OAuth protocol validation, authorization codes, PKCE, token exchange, refresh and opaque Bearer introspection remain owned by `oidc-provider`. Public MCP clients register through the provider DCR endpoint. `src/registration.ts` projects bounded untrusted metadata to a public authorization-code profile before provider validation; unsupported remote key/sector/request metadata is rejected without fetching it. HTTPS web callbacks and HTTP loopback native callbacks are validated, and S256 PKCE is mandatory. Registration creates no approval or application user. Resource clients authenticate through private introspection credentials and may introspect tokens only for their configured audience.
 

@@ -36,7 +36,7 @@ Google-managed certificates usually take about 15 minutes and can take up to 24 
 
 ## Revocation and storage
 
-Use `/connections` or browser logout to revoke access. Do not delete connection guard records to clean up expired tokens: durable revocation guards prevent delayed writes from reviving credentials. TTL is appropriate only for expiring artifacts, identity sessions, login attempts, approvals and browser sessions.
+Use `/connections` or browser logout to revoke access. Do not delete connection guard records to clean up expired tokens: durable revocation guards prevent delayed writes from reviving credentials. TTL is appropriate only for expiring artifacts, identity sessions, login attempts, approvals, browser sessions, change confirmations and their reference markers.
 
 For storage failures, verify the exact Firestore project/database and runtime identity's database-scoped IAM, then check `/readyz`. Do not point a local test at production or reset the database as a troubleshooting step. See [deployment and recovery](deployment.md).
 
