@@ -24,6 +24,10 @@ test('runtime configuration validates exact HTTPS issuer and browser redirects u
     { browserSessionTtlSeconds: 2592001 },
     { clients: [{ client_id: 'legacy-public-client' }] },
     { unexpected: true },
+    { project: undefined },
+    { project: 'Example_Project' },
+    { projectNumber: undefined },
+    { projectNumber: 'not-a-number' },
     { browserApps: [{ ...example.browserApps[0], redirect_uris: ['http://actions.example.test/return'] }] },
     { browserApps: [{ ...example.browserApps[0], redirect_uris: ['https:actions.example.test/return'] }] },
     { browserApps: [{ ...example.browserApps[0], redirect_uris: ['https://actions.example.test\\return'] }] },
@@ -39,6 +43,12 @@ test('renderer injects runtime URLs and registries without changing secret refer
   assert.equal(env.GATE_ISSUER.value, example.issuer);
   assert.equal(env.GATE_SESSION_COOKIE_DOMAIN.value, example.sessionCookieDomain);
   assert.equal(env.GATE_GITHUB_USER_ID.value, example.githubUserId);
+  const privateProject = parseRuntimeConfig({ ...example, project: 'private-project', projectNumber: '987654321098' });
+  const projectRendered = renderService(manifest, image, privateProject);
+  assert.equal(projectRendered.metadata.namespace, '987654321098');
+  assert.equal(projectRendered.spec.template.spec.serviceAccountName, 'gate-runtime@private-project.iam.gserviceaccount.com');
+  assert.equal(projectRendered.spec.template.spec.containers[0].env.find(entry => entry.name === 'GATE_FIRESTORE_PROJECT_ID').value, 'private-project');
+  assert.equal(JSON.stringify(manifest).includes('private-project'), false);
   assert.equal('GATE_CLIENTS' in env, false);
   assert.deepEqual(JSON.parse(env.GATE_BROWSER_APPS.value), example.browserApps);
   assert.equal(env.GATE_RESOURCES.valueFrom.secretKeyRef.name, 'gate-resources');

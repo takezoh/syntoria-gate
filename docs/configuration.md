@@ -57,6 +57,6 @@ On Cloud Run, use the dedicated runtime identity and Application Default Credent
 
 ## Ignored deployment inputs
 
-Copy [infra/runtime-config.example.json](../infra/runtime-config.example.json) to `.local/gate-runtime.json`. It contains `issuer`, `sessionCookieDomain`, `githubUserId`, `browserApps` and optional `browserSessionTtlSeconds`. The renderer supplies these nonsecret settings to the Cloud Run template; Firestore identifiers and secret references remain in the template. Resource registrations remain in the private `GATE_RESOURCES` secret.
+Copy [infra/runtime-config.example.json](../infra/runtime-config.example.json) to `.local/gate-runtime.json`. It contains `project` and `projectNumber` (the GCP project ID and number), `issuer`, `sessionCookieDomain`, `githubUserId`, `browserApps` and optional `browserSessionTtlSeconds`. The renderer supplies these nonsecret settings to the Cloud Run template, including the service namespace, service account and Firestore project; the Firestore database ID and secret references remain in the template, which carries only placeholder project values. Resource registrations remain in the private `GATE_RESOURCES` secret.
 
 Do not commit actual endpoint values, account IDs, redirect registrations, rendered manifests or secrets. The renderer's output inside the repository must be under `.local/`. See [deployment](deployment.md) before applying it.

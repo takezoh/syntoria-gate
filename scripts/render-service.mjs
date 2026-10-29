@@ -15,12 +15,18 @@ export function renderService(manifest, image, runtimeConfig) {
   const container = rendered.spec?.template?.spec?.containers?.[0];
   if (!container || !Array.isArray(container.env)) throw new Error('Invalid Gate Cloud Run service template');
   container.image = image;
+  rendered.metadata.namespace = runtimeConfig.projectNumber;
+  const template = rendered.spec.template.spec;
+  const account = typeof template.serviceAccountName === 'string' ? template.serviceAccountName.split('@')[0] : '';
+  if (!account) throw new Error('Invalid Gate Cloud Run service template');
+  template.serviceAccountName = `${account}@${runtimeConfig.project}.iam.gserviceaccount.com`;
   const env = new Map(container.env.map(entry => [entry.name, entry]));
   const set = (name, value) => {
     const entry = env.get(name);
     if (entry) { delete entry.valueFrom; entry.value = value; }
     else { const added = { name, value }; container.env.push(added); env.set(name, added); }
   };
+  set('GATE_FIRESTORE_PROJECT_ID', runtimeConfig.project);
   set('GATE_ISSUER', runtimeConfig.issuer);
   set('GATE_SESSION_COOKIE_DOMAIN', runtimeConfig.sessionCookieDomain);
   set('GATE_GITHUB_USER_ID', runtimeConfig.githubUserId);

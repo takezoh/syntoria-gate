@@ -17,7 +17,7 @@ function parseUrl(value, protocol, canonical = true) {
 }
 function underParent(host, parent) { return host.toLowerCase() === parent || host.toLowerCase().endsWith(`.${parent}`); }
 function exactString(value) { return typeof value === 'string' && value.trim() === value && value.length > 0; }
-const RUNTIME_CONFIG_KEYS = new Set(['issuer', 'sessionCookieDomain', 'githubUserId', 'browserApps', 'browserSessionTtlSeconds']);
+const RUNTIME_CONFIG_KEYS = new Set(['project', 'projectNumber', 'issuer', 'sessionCookieDomain', 'githubUserId', 'browserApps', 'browserSessionTtlSeconds']);
 
 export function parseRuntimeConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail();
@@ -26,6 +26,9 @@ export function parseRuntimeConfig(input) {
   const issuer = parseUrl(input.issuer, 'https:', false);
   if (issuer.search || issuer.pathname !== '/' || issuer.href.slice(0, -1) !== input.issuer || issuer.hostname === cookieDomain || !underParent(issuer.hostname, cookieDomain)) fail();
   if (typeof input.githubUserId !== 'string' || !/^[1-9][0-9]*$/u.test(input.githubUserId)) fail();
+  // The GCP project stays out of tracked files; the template carries placeholders.
+  if (typeof input.project !== 'string' || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u.test(input.project)) fail();
+  if (typeof input.projectNumber !== 'string' || !/^[1-9][0-9]{5,19}$/u.test(input.projectNumber)) fail();
 
   if (!Array.isArray(input.browserApps) || input.browserApps.length === 0) fail();
   const appIds = new Set();
@@ -43,6 +46,8 @@ export function parseRuntimeConfig(input) {
   const ttl = input.browserSessionTtlSeconds ?? 2_592_000;
   if (!Number.isSafeInteger(ttl) || ttl < 3600 || ttl > 2_592_000) fail();
   return {
+    project: input.project,
+    projectNumber: input.projectNumber,
     issuer: input.issuer,
     sessionCookieDomain: cookieDomain,
     githubUserId: input.githubUserId,

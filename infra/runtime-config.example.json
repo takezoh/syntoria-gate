@@ -1,4 +1,6 @@
 {
+  "project": "example-project",
+  "projectNumber": "123456789012",
   "issuer": "https://gate.example.test",
   "sessionCookieDomain": "example.test",
   "githubUserId": "12345",
