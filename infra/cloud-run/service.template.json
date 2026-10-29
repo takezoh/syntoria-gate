@@ -22,7 +22,7 @@
           {"name": "GATE_GITHUB_CLIENT_SECRET", "valueFrom": {"secretKeyRef": {"name": "gate-github-client-secret", "key": "1"}}},
           {"name": "GATE_COOKIE_KEYS", "valueFrom": {"secretKeyRef": {"name": "gate-cookie-keys", "key": "1"}}},
           {"name": "GATE_JWKS", "valueFrom": {"secretKeyRef": {"name": "gate-jwks", "key": "1"}}},
-          {"name": "GATE_RESOURCES", "valueFrom": {"secretKeyRef": {"name": "gate-resources", "key": "2"}}}
+          {"name": "GATE_RESOURCES", "valueFrom": {"secretKeyRef": {"name": "gate-resources", "key": "7"}}}
         ]
       }]
     }
