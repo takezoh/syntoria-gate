@@ -26,3 +26,14 @@ role: verification
 Four deliberate faults were injected into the built output only, and each made the integration test fail. The faults were: no change-hash check on consumption; no `used` transition; no CSRF check on decisions; and decisions accepted on an inactive connection. The build was then regenerated from unchanged source.
 
 Terraform is not installed on this host, so the two new TTL resources were not formatted or validated with Terraform, and no plan or apply ran. No hosted Firestore, TTL deletion timing, Cloud Run, GitHub OAuth, real browser rendering or MCP host was exercised. The dev-skills implementation runtime was not used, so no formal lifecycle gate is claimed.
+
+## Production release
+
+On 2026-10-29, source `c2d093b`, which also carries the pending-registration expiry change, was released as revision `gate-api-confirm-c2d093b` with image `sha256:38faebf473700eb6c5aa94ffa000735cb7e916509c9694d63875bdb48c6f9c3a` (OCI index, built with Docker Buildx for linux/amd64).
+
+- The revision reuses the serving configuration of the previous revision and changes only the image.
+- Firestore TTL policies on `expiresAt` were added for `gate_confirmations` and `gate_confirmation_references`; both read back `ACTIVE`.
+- Before traffic moved, the candidate revision returned 200 for readiness and OIDC discovery, 401 for an unauthenticated confirmation create, and 404 for `/confirm` with an unknown ID.
+- After 100% traffic, the public origin returned 200 for readiness and 401 for an unauthenticated confirmation create.
+
+No real confirmation has been created, approved or consumed in production.
