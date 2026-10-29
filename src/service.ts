@@ -346,7 +346,23 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     const session=secret?await storage.browser(secret):undefined;
     if(!secret||!session||!equal(session.csrf,csrf)) {jsonFailure(res,403);return;}
     if(!await storage.logoutBrowser(secret,session.connectionId)) {jsonFailure(res,401);return;}
-    res.writeHead(204,{'cache-control':'no-store','set-cookie':clearSessionCookie(config)});res.end();
+    // Signing out a device also ends Gate sign-in on this browser, so a shared browser cannot approve it again without GitHub.
+    const identity=cookie(req,IDENTITY_COOKIE);
+    if(identity)await storage.deleteIdentity(identity);
+    res.writeHead(204,{'cache-control':'no-store','set-cookie':[clearSessionCookie(config),clearIdentityCookie()]});res.end();
+  }
+  /** Ends Gate sign-in and this browser's device session; other devices and AI connections stay active. */
+  async function signOut(req:IncomingMessage,res:ServerResponse) {
+    if(oneHeader(req,'origin')!==config.issuer)throw new HttpFailure(403);
+    const cookies=authCookies(req),values=await form(req);
+    if(values.getAll('csrf').length!==1||[...values.keys()].some(key=>key!=='csrf'))throw new HttpFailure(400);
+    const identitySession=cookies.identity?await storage.identity(cookies.identity):undefined;
+    if(identitySession&&!equal(identitySession.csrf,values.get('csrf')!))throw new HttpFailure(403);
+    if(cookies.identity)await storage.deleteIdentity(cookies.identity);
+    const browser=cookies.session?await storage.browser(cookies.session):undefined;
+    if(cookies.session&&browser)await storage.logoutBrowser(cookies.session,browser.connectionId);
+    setCookies(res,[clearIdentityCookie(),clearLoginCookie(),...(browser?[clearSessionCookie(config)]:[])]);
+    res.writeHead(303,{location:'/signed-out','cache-control':'no-store'});res.end();
   }
 
   const account=`GitHub user ${config.githubUserId}`;
@@ -447,6 +463,7 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
   async function handler(req:IncomingMessage,res:ServerResponse) {
     let path='';
     try {
+      res.setHeader('strict-transport-security','max-age=31536000');
       const url=new URL(req.url!,config.issuer);path=url.pathname;
       if(path==='/healthz'){res.writeHead(200);res.end('ok');return;}
       if(path==='/readyz'){
@@ -498,6 +515,8 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
         const destination=interaction?`/interaction/${encodeURIComponent(interaction)}`:confirmation&&isConfirmationId(confirmation)?`/confirm?id=${confirmation}`:'/connections';
         res.writeHead(303,{location:destination,'cache-control':'no-store'});res.end();return;
       }
+      if(path==='/logout'&&req.method==='POST'){await signOut(req,res);return;}
+      if(path==='/signed-out'&&req.method==='GET'){page(res,'Signed out','<p class="lead">You are signed out of Gate on this browser, and this browser\'s device session has ended.</p><p class="muted">Your other devices and AI connections stay active. Revoke them in Connections after signing in again.</p><a class="button" href="/login">Sign in again</a>',undefined,{lead:ICONS.ok});return;}
       if(path==='/login'&&req.method==='GET'){
         authCookies(req);
         if(await currentIdentity(req)){res.writeHead(303,{location:'/connections','cache-control':'no-store'});res.end();return;}
@@ -513,7 +532,8 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
         const clients=rows.filter(r=>r.kind!=='browser').map(r=>`<div class="card row"><div class="grow"><span class="name">${escape(r.clientName??'No name supplied')}<span class="tag">Unverified name</span></span><span class="mono">client ${escape(shortId(r.clientId))}</span><span class="muted">${approved(r.createdAt)}</span></div>${revoke(r.id)}</div>`);
         const browsers=rows.filter(r=>r.kind==='browser').map(r=>`<div class="card row"><div class="grow"><span class="name">${escape(r.deviceLabel??'This browser')}</span><span class="muted">${current?.connectionId===r.id?'This browser · ':''}${approved(r.createdAt)}</span></div>${revoke(r.id)}</div>`);
         const section=(id:string,label:string,cards:string[])=>cards.length?`<section aria-labelledby="${id}"><h2 id="${id}" class="label">${label}</h2>${cards.join('')}</section>`:'';
-        const body='<p class="lead">AIs and browsers that can use your services. Revoking stops access at their next request.</p>'+(rows.length?section('ai-clients','AI clients',clients)+section('browsers','Browsers',browsers):'<p class="muted">No connections.</p>');
+        const signOutForm=`<form method="post" action="/logout" class="actions"><input type="hidden" name="csrf" value="${escape(s.csrf)}"><button class="secondary">Sign out of Gate on this browser</button></form>`;
+        const body='<p class="lead">AIs and browsers that can use your services. Revoking stops access at their next request.</p>'+(rows.length?section('ai-clients','AI clients',clients)+section('browsers','Browsers',browsers):'<p class="muted">No connections.</p>')+signOutForm;
         page(res,'Connections',body,undefined,{account});return;
       }
       if(path==='/connections/revoke'&&req.method==='POST') {

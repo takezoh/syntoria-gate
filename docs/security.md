@@ -39,6 +39,11 @@ An identity session permits approval and connection management; it is not a
 resource API credential. Browser device approval and MCP OAuth connection approval
 are independent flows.
 
+The identity session is a host-only cookie that lasts at most 24 hours. It ends
+earlier when the person signs out of Gate (`POST /logout`) or signs out the browser
+device (`POST /browser/logout`), so a shared browser cannot approve a device,
+connection or change again without GitHub sign-in.
+
 For OAuth, Gate checks the authenticated identity against the interaction's account
 and resolves the actual registered public client and redirect URI. The approval
 page displays the escaped, **unverified** client name and actual redirect URI.

@@ -16,7 +16,7 @@ Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, s
 | `GET /browser/approve` | Gate-issued `transaction`; host-only login and identity cookies | HTML device approval form |
 | `POST /browser/approve` | Form fields `transaction`, `csrf`, `decision=approve\|deny`; issuer Origin and bound cookies | 303 to the registered return page; approval creates the connection/session and sets the common cookie |
 | `GET /browser/session` | Registered SPA Origin, credentials; no Authorization header | 200 `{csrf_token}` for the active browser session |
-| `POST /browser/logout` | Registered SPA Origin, credentials, JSON `{}`, `X-CSRF-Token` | 204, atomic current-device revocation and session deletion; clears the shared cookie |
+| `POST /browser/logout` | Registered SPA Origin, credentials, JSON `{}`, `X-CSRF-Token` | 204, atomic current-device revocation and session deletion; also ends Gate sign-in on this browser; clears the shared and identity cookies |
 | `POST /browser/session/introspect` | Resource Basic authentication and JSON `{session,resource}` | 200 active session claims or `{active:false}` |
 | `OPTIONS /browser/session` | Registered Origin, requested method GET | 204 for allowed preflight |
 | `OPTIONS /browser/logout` | Registered Origin, requested method POST | 204 for allowed preflight |
@@ -86,6 +86,8 @@ The approval page shows the requesting client's unverified name from Gate's own 
 | `GET /login` | Start GitHub identity login or return an already identified user to `/connections` |
 | `GET /connections` | HTML list of the configured user's active AI clients and browsers, with each client's unverified name, shortened client ID and approval date; identity login required |
 | `POST /connections/revoke` | Form `id` and identity-session `csrf`; issuer Origin required; revoke one connection, then redirect to `/connections` |
+| `POST /logout` | Form `csrf` (the identity session's value when one is active); issuer Origin required | End Gate sign-in on this browser and this browser's device session, clear their cookies, then 303 to `/signed-out`; AI connections and other devices stay active |
+| `GET /signed-out` | Confirmation page after `POST /logout` |
 | `GET /healthz` | Process liveness, 200 `ok`; used by the Cloud Run liveness probe |
 | `GET /readyz` | Read-only Firestore readiness, 200 `ok` or 503 `unavailable`; response deadline two seconds |
 
@@ -103,6 +105,6 @@ These cookies are Secure, HttpOnly, SameSite=Lax and Path=/. Provider-owned OIDC
 
 ## Errors and caching
 
-Custom browser JSON failures use `unauthorized`, `forbidden` or `request_failed`. Other custom pages can return a bounded plain-text failure. OAuth errors follow provider protocol responses; consumers must not assume every error is JSON. Custom HTML and session responses disable caching. Rendered pages escape dynamic content and use a restrictive Content Security Policy.
+Custom browser JSON failures use `unauthorized`, `forbidden` or `request_failed`. Other custom pages can return a bounded plain-text failure. OAuth errors follow provider protocol responses; consumers must not assume every error is JSON. Custom HTML and session responses disable caching. Every Gate response carries `Strict-Transport-Security: max-age=31536000`, without `includeSubDomains`. Rendered pages escape dynamic content and use a restrictive Content Security Policy.
 
 Gate returns 401 for absent/invalid sessions, 403 for denied Origin/CSRF/approval, 400 for malformed requests and 413 for oversized custom-handler bodies where applicable. The SDK maps credential rejection to 401 and unavailable authorization to 503. Never treat a failed authorization request as successful or cache a positive principal across resource requests.

@@ -397,8 +397,10 @@ test('real provider / real Firestore Emulator: separate connections, restart, re
  const logout=await request('/browser/logout',{method:'POST',headers:{origin:'https://actions.example.test','content-type':'application/json','x-csrf-token':browserPrincipal.csrfToken},body:'{}'});assert.equal(logout.status,204);
  assert.equal((await browserVerifier.verifySession(browserSecret).catch(error=>error.status)),401);assert.equal(await storage.browser(browserSecret),undefined);
  assert.ok(logout.headers.getSetCookie().some(value=>value.startsWith('__Secure-gate_session=')&&value.includes('Domain=example.test')&&/max-age=0/i.test(value)));
- const afterLogout=await request('/browser/login?'+new URLSearchParams({app_id:'lore',redirect_uri:'https://notes.example.test/auth-return.html'}));assert.equal(afterLogout.status,303);assert.ok(afterLogout.location.startsWith('/browser/approve?transaction='));
- const denyPage=await request(afterLogout.location);const denyTransaction=/name="transaction" value="([^"]+)"/.exec(denyPage.text)[1];const denyCsrf=/name="csrf" value="([^"]+)"/.exec(denyPage.text)[1];
+ assert.ok(logout.headers.getSetCookie().some(value=>value.startsWith('__Host-gate_identity=')&&/max-age=0/i.test(value)));assert.equal(cookies.has('__Host-gate_identity'),false);
+ const afterLogout=await request('/browser/login?'+new URLSearchParams({app_id:'lore',redirect_uri:'https://notes.example.test/auth-return.html'}));assert.equal(afterLogout.status,303);assert.ok(afterLogout.location.startsWith('https://github.com/'),'Device sign-out also ends Gate sign-in');
+ const reLogin=await request('/github/callback?'+new URLSearchParams({state:new URL(afterLogout.location).searchParams.get('state'),code:'good'}));assert.equal(reLogin.status,303);assert.ok(reLogin.location.startsWith('/browser/approve?transaction='));
+ const denyPage=await request(reLogin.location);const denyTransaction=/name="transaction" value="([^"]+)"/.exec(denyPage.text)[1];const denyCsrf=/name="csrf" value="([^"]+)"/.exec(denyPage.text)[1];
  const deny=await request('/browser/approve',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({transaction:denyTransaction,csrf:denyCsrf,decision:'deny'})});assert.equal(deny.status,303);assert.equal(deny.location,'https://notes.example.test/auth-return.html');assert.equal(cookies.has('__Secure-gate_session'),false);
  const secondStart=await request('/browser/login?'+new URLSearchParams({app_id:'actions',redirect_uri:appRedirect}),{headers:{'user-agent':'Test device 2'}});const secondPage=await request(secondStart.location);const secondTransaction=/name="transaction" value="([^"]+)"/.exec(secondPage.text)[1];const secondCsrf=/name="csrf" value="([^"]+)"/.exec(secondPage.text)[1];
  const secondApproval=await request('/browser/approve',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({transaction:secondTransaction,csrf:secondCsrf,decision:'approve'})});assert.equal(secondApproval.status,303);
@@ -411,5 +413,26 @@ test('real provider / real Firestore Emulator: separate connections, restart, re
  assert.equal((await storage.connection(independentMcpPrincipal.connection_id).get()).get('revoked'),false);
  assert.equal((await introspect(independentMcp.access_token)).json().active,true);
  await assertConfirmations(independentMcpPrincipal.connection_id,webClient);
+ const approveDevice=async label=>{
+  let next=(await request('/browser/login?'+new URLSearchParams({app_id:'actions',redirect_uri:appRedirect}),{headers:{'user-agent':label}})).location;
+  if(next.startsWith('https://github.com/'))next=(await request('/github/callback?'+new URLSearchParams({state:new URL(next).searchParams.get('state'),code:'good'}))).location;
+  const text=(await request(next)).text;const transaction=/name="transaction" value="([^"]+)"/.exec(text)[1];const csrf=/name="csrf" value="([^"]+)"/.exec(text)[1];
+  assert.equal((await request('/browser/approve',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({transaction,csrf,decision:'approve'})})).status,303);
+  return cookies.get('__Secure-gate_session').value;
+ };
+ const thirdSecret=await approveDevice('Test device 3');const thirdSession=await storage.browser(thirdSecret);assert.ok(thirdSession);
+ const signedInPage=await request('/connections');assert.match(signedInPage.text,/action="\/logout"/);
+ const signOutCsrf=/name="csrf" value="([^"]+)"/.exec(signedInPage.text)[1];
+ const signOut=(origin,csrf)=>request('/logout',{method:'POST',headers:{origin,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf})});
+ assert.equal((await signOut('https://evil.example.test',signOutCsrf)).status,403);
+ assert.equal((await signOut(issuer,'wrong')).status,403);assert.equal(cookies.has('__Host-gate_identity'),true);
+ const signedOut=await signOut(issuer,signOutCsrf);assert.equal(signedOut.status,303);assert.equal(signedOut.location,'/signed-out');
+ assert.equal(signedOut.headers.get('strict-transport-security'),'max-age=31536000');
+ assert.equal(cookies.has('__Host-gate_identity'),false);assert.equal(cookies.has('__Secure-gate_session'),false);
+ assert.equal(await storage.browser(thirdSecret),undefined);assert.equal((await storage.connection(thirdSession.connectionId).get()).get('revoked'),true);
+ assert.equal((await introspect(independentMcp.access_token)).json().active,true,'Signing out leaves AI connections active');
+ const signedOutPage=await request('/signed-out');assert.equal(signedOutPage.status,200);assertPageCsp(signedOutPage,"'self'");
+ const afterSignOut=await request('/connections');assert.equal(afterSignOut.status,303);assert.equal(afterSignOut.location,'/login');
+ const loginAgain=await request('/browser/login?'+new URLSearchParams({app_id:'actions',redirect_uri:appRedirect}));assert.ok(loginAgain.location.startsWith('https://github.com/'));
  } finally {if(service?.server.listening)await stop();await db.terminate();}
 });

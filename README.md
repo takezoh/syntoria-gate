@@ -24,7 +24,7 @@ When an AI asks an application to make a change that needs your own decision, th
 
 ## See and revoke access
 
-Open `/connections` at your Gate origin to see your approved AI clients and browser devices, with each AI's self-reported name and the date you approved it, and to revoke any of them. Signing out of a browser device ends its shared session across your applications; other devices and AI connections stay active. Applications check every request with Gate, so later requests from a revoked connection are rejected.
+Open `/connections` at your Gate origin to see your approved AI clients and browser devices, with each AI's self-reported name and the date you approved it, and to revoke any of them. Signing out of a browser device ends its shared session across your applications and your Gate sign-in on that browser, so approving it again requires GitHub sign-in; other devices and AI connections stay active. `/connections` also lets you sign out of Gate on the browser you are using. Applications check every request with Gate, so later requests from a revoked connection are rejected.
 
 ## Who it is for
 

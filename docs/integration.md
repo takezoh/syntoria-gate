@@ -56,7 +56,7 @@ For browser mutations, the resource API must enforce its exact registered SPA Or
 
 ### Sign out the device
 
-Fetch Gate's `GET /browser/session` with credentials from a registered SPA origin to obtain `{csrf_token}`. Then POST `{}` as JSON to `/browser/logout`, including credentials and `X-CSRF-Token`. A successful response is 204 and expires the shared cookie. This revokes the current browser connection across the suite without revoking independent MCP grants. Other tabs should recheck authorization and preserve their unsaved state.
+Fetch Gate's `GET /browser/session` with credentials from a registered SPA origin to obtain `{csrf_token}`. Then POST `{}` as JSON to `/browser/logout`, including credentials and `X-CSRF-Token`. A successful response is 204 and expires the shared cookie. This revokes the current browser connection across the suite without revoking independent MCP grants. It also ends Gate sign-in on this browser, so approving this browser again requires GitHub sign-in. Other tabs should recheck authorization and preserve their unsaved state.
 
 ## MCP OAuth clients
 

@@ -190,6 +190,9 @@ export class Storage {
     const ref=this.identitySessions().doc(key(id));
     await ref.set({ ...session, expiresAt: Timestamp.fromMillis(this.now()+ttlSeconds*1000) });
   }
+  async deleteIdentity(id: string) {
+    await this.identitySessions().doc(key(id)).delete();
+  }
   async identity(id: string): Promise<IdentitySession | undefined> {
     const ref=this.identitySessions().doc(key(id));
     const snapshot=await ref.get();
