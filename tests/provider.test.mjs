@@ -280,8 +280,11 @@ test('real provider / real Firestore Emulator: separate connections, restart, re
  const verifier=createGateVerifier({issuer,audience:'https://weave.example',clientId:'weave',clientSecret:config.resources[0].client_secret,browserClientId:'weave-browser',allowLoopbackHttp:true});
  assert.equal((await verifier.verifyToken(first.access_token)).userId,'github:12345');
  const a=(await introspect(first.access_token)).json();assert.equal(a.active,true);assert.equal(a.sub,'github:12345');assert.ok(a.connection_id);assert.equal(a.token_type,'Bearer');
+ // The client's own registration name is relayed unverified for display; a client without one has none.
+ assert.equal(a.client_name,'<MCP & Client>');assert.equal((await verifier.verifyToken(first.access_token)).clientName,'<MCP & Client>');
  const second=await connect(webClient);const b=(await introspect(second.access_token)).json();assert.equal(b.active,true);assert.notEqual(a.connection_id,b.connection_id);
  const nativeFlow=await connect(nativeClient,{redirectUri:'http://127.0.0.1:55438/callback'});assert.ok(nativeFlow.access_token);assert.equal((await introspect(nativeFlow.access_token)).json().active,true);
+ assert.equal(Object.hasOwn((await introspect(nativeFlow.access_token)).json(),'client_name'),false);assert.equal((await verifier.verifyToken(nativeFlow.access_token)).clientName,null);
  for(const redirectUri of ['http://127.0.0.2:55438/callback','http://127.0.0.1:55438/other']) {
   const invalid=await request('/auth?'+new URLSearchParams({client_id:nativeClient.client_id,redirect_uri:redirectUri,response_type:'code',scope:'openid',code_challenge:'a'.repeat(43),code_challenge_method:'S256'}));
   assert.equal(invalid.status,400,invalid.location);
@@ -309,7 +312,7 @@ test('real provider / real Firestore Emulator: separate connections, restart, re
  const revoked=await request('/connections/revoke',{method:'POST',headers:{origin:issuer,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,id:a.connection_id})});assert.equal(revoked.status,303);
  assert.equal((await introspect(first.access_token)).json().active,false);await assert.rejects(verifier.verifyToken(first.access_token),e=>e instanceof GateError&&e.status===401);assert.equal((await introspect(second.access_token)).json().active,true);
  const refresh=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:first.refresh_token,client_id:webClient.client_id})});assert.equal(refresh.status,400);
- const refreshGood=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:second.refresh_token,client_id:webClient.client_id})});assert.equal(refreshGood.status,200,refreshGood.text);const refreshed=(await introspect(refreshGood.json().access_token)).json();assert.equal(refreshed.connection_id,b.connection_id);
+ const refreshGood=await request('/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:second.refresh_token,client_id:webClient.client_id})});assert.equal(refreshGood.status,200,refreshGood.text);const refreshed=(await introspect(refreshGood.json().access_token)).json();assert.equal(refreshed.client_name,'<MCP & Client>');assert.equal(refreshed.connection_id,b.connection_id);
  assert.equal((await introspect(second.refresh_token)).json().active,false);
 
 

@@ -7,6 +7,8 @@ export interface GatePrincipal {
   readonly userId: string;
   readonly connectionId: string;
   readonly clientId: string;
+  /** The client's unverified registration name for display, or null; it never identifies or authorizes. */
+  readonly clientName?: string | null;
 }
 
 export interface GateSessionPrincipal extends GatePrincipal {
@@ -50,6 +52,9 @@ const nonempty = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(value);
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+/** The registration rule for `client_name`; anything else is treated as absent. */
+const displayName = (value: unknown): string | null =>
+  typeof value === 'string' && value.length > 0 && value.length <= 100 && value.trim() === value && !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
 
 function safeUrl(value: string, allowHttp: boolean): URL {
   let url: URL;
@@ -167,7 +172,9 @@ export function createGateVerifier(config: GateConfig, dependencies: GateDepende
       if (!Array.isArray(audiences) || audiences.length === 0 || !audiences.every(nonempty) || !audiences.includes(audience)) {
         throw new GateError(401);
       }
-      return Object.freeze({ issuer, userId: data.sub, connectionId: data.connection_id, clientId });
+      // An absent or malformed display name never affects authorization.
+      const clientName = displayName(data.client_name);
+      return Object.freeze({ issuer, userId: data.sub, connectionId: data.connection_id, clientId, clientName });
     }
     try { return await Promise.race([authorize(), timeout]); }
     catch (error) { throw error instanceof GateError ? error : new GateError(503); }

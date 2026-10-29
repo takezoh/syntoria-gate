@@ -95,7 +95,7 @@ test('fresh native introspection on every request, including immediate revoke', 
   let revoked = false;
   const { verifier, calls } = fixture(() => json(revoked ? { active: false } : active()));
   const principal = await verifier.authenticate('Bearer some.token');
-  assert.deepEqual(principal, { issuer, userId: 'person-a', connectionId: 'connection-a', clientId: 'dcr-public-client' });
+  assert.deepEqual(principal, { issuer, userId: 'person-a', connectionId: 'connection-a', clientId: 'dcr-public-client', clientName: null });
   assert.ok(Object.isFrozen(principal));
   await verifier.verifyToken('some.token');
   revoked = true;
@@ -104,6 +104,17 @@ test('fresh native introspection on every request, including immediate revoke', 
   assert.equal(calls.filter(call => call.url.endsWith('openid-configuration')).length, 1);
   assert.equal(new URLSearchParams(calls[1].init.body).get('token'), 'some.token');
   assert.ok(calls.every(call => call.init.redirect === 'error'));
+});
+
+test('a relayed client name is display data and an invalid one never affects verification', async () => {
+  const named = fixture(() => json(active({ client_name: 'Desktop <MCP>' })));
+  assert.equal((await named.verifier.verifyToken('some.token')).clientName, 'Desktop <MCP>');
+  for (const client_name of ['', ' padded', 'x'.repeat(101), 'line\nbreak', 42, null]) {
+    const { verifier } = fixture(() => json(active({ client_name })));
+    const principal = await verifier.verifyToken('some.token');
+    assert.equal(principal.clientName, null);
+    assert.equal(principal.clientId, 'dcr-public-client');
+  }
 });
 
 test('separate users and resources do not share cached acceptance', async () => {

@@ -201,7 +201,8 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     loadExistingGrant:async ctx=>{const id=ctx.oidc.result?.consent?.grantId;return id?provider.Grant.find(id):undefined;},
     expiresWithSession:()=>false,
     issueRefreshToken:(_ctx,client)=>client.grantTypeAllowed('refresh_token'),
-    extraTokenClaims:(_ctx,token)=>({connection_id:'grantId' in token?token.grantId:undefined,azp:token.clientId,gate_approved:true}),
+    // client_name relays the client's own registration name for resource display only; it is unverified and grants nothing.
+    extraTokenClaims:async(_ctx,token)=>{const clientName=token.clientId?(await provider.Client.find(token.clientId))?.clientName:undefined;return {connection_id:'grantId' in token?token.grantId:undefined,azp:token.clientId,gate_approved:true,...(typeof clientName==='string'?{client_name:clientName}:{})};},
     ttl:{AccessToken:300,IdToken:300,AuthorizationCode:60,Grant:30*86400,RefreshToken:30*86400,Session:86400,Interaction:600},
   };
   provider=new Provider(config.issuer,settings);

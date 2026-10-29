@@ -46,7 +46,7 @@ try {
 | SDK method | Input and result |
 | --- | --- |
 | `verifySession(session)` | Browser cookie value; returns immutable `GateSessionPrincipal` with issuer, user ID, connection ID, browser client ID, expiry in epoch seconds and CSRF token |
-| `verifyToken(token)` | Raw opaque access token; returns immutable `GatePrincipal` |
+| `verifyToken(token)` | Raw opaque access token; returns immutable `GatePrincipal` with issuer, user ID, connection ID, client ID and `clientName`, the client's unverified registration name for display or null |
 | `authenticate(header)` | A single `Bearer <token>` Authorization value; same result as `verifyToken` |
 | `protectedResourceMetadata(resource, issuer)` | HTTPS metadata for an API's OAuth protected-resource discovery response |
 
