@@ -66,6 +66,10 @@ Resource services verify each Bearer token with `verifyToken` or `authenticate`.
 
 OAuth connection approval is independent of the common browser device approval. The resource API must map the verified issuer/subject to an explicitly enabled internal user, without a static MCP-client allowlist.
 
+### Telling the person from an AI
+
+Gate's two credentials stand for different actors. A browser session, verified with `verifySession`, is the person using a registered application on a device they approved. A Bearer token, verified with `verifyToken`, is a client connection: an AI or other program the person approved, acting for them. Its `subject` names the person, but the actor is the client. Record which of the two made each change, and do not treat a Bearer request as the person's own decision. When a change needs that decision, request a [change confirmation](#confirming-a-change). A click inside an AI host's embedded UI reaches the resource through that host's connection, so it counts as the client.
+
 ### Identifying each AI client
 
 A verified `GatePrincipal` carries two client identifiers with different meanings:

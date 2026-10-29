@@ -1,6 +1,6 @@
 # Syntoria Gate
 
-Gate provides shared sign-in and connection approval for one person's Syntoria applications. Sign in with the configured GitHub account, approve a browser device once, and use registered applications through a common session. Each approved connection has full access, subject to the receiving application's explicit user admission and data boundaries.
+Gate provides shared sign-in and connection approval for one person's Syntoria applications. Sign in with the configured GitHub account, approve a browser device once, and use registered applications through a common session. A browser device you approve is you, using an application. An approved OAuth connection is an AI or other client acting for you: it reaches the same applications, subject to each application's user admission and data boundaries, but it is not you, and applications tell its changes apart from yours.
 
 Gate runs on Cloud Run with TypeScript, Node.js 24, `oidc-provider` and Firestore Native mode. It serves its own sign-in, approval and connection-management pages. Application SPAs call their APIs directly; Gate verifies sessions and tokens without forwarding application requests.
 
