@@ -55,6 +55,6 @@ summary: Sign-out ends Gate sign-in on the browser, POST /logout is added, and e
 
 ## Summary
 
-Device sign-out from an application now also ends Gate sign-in on that browser, and `/connections` offers "Sign out of Gate on this browser" (`POST /logout`, issuer Origin and identity CSRF), which also ends that browser's device session and shows `/signed-out`. All responses send HSTS. Nothing is committed or deployed.
+Device sign-out from an application now also ends Gate sign-in on that browser, and `/connections` offers "Sign out of Gate on this browser" (`POST /logout`, issuer Origin and identity CSRF), which also ends that browser's device session and shows `/signed-out`. All responses send HSTS. Committed as `52b383e` and released to production on 2026-10-29; see the [verification](verification.md#production-release).
 
 ## Closure Notes

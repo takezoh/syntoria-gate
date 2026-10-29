@@ -43,7 +43,7 @@ Open `/connections` at your Gate origin to see your approved AI clients and brow
 
 ## Status
 
-The latest recorded production release, on 2026-10-29, added change confirmations and expiry for unapproved registrations. Its hosted probes covered readiness, OIDC discovery and the rejection of unauthenticated confirmation requests; the 2026-10-20 release probes covered dynamic registration. The release records do not include a hosted personal GitHub sign-in, a connection approval and token exchange through a real AI host, or a real change confirmation. See the [change confirmation release](docs/changes/change-20261028-change-confirmation/verification.md#production-release) and the [DCR release record](docs/note/note-20261020-dcr-production-release.md).
+The latest recorded production release, on 2026-10-29, made sign-out end Gate sign-in on the browser and added HSTS to every response. An earlier release the same day added change confirmations and expiry for unapproved registrations. Their hosted probes covered readiness, OIDC discovery, the HSTS header and the rejection of unauthenticated confirmation and sign-out requests; the 2026-10-20 release probes covered dynamic registration. The release records do not include a hosted personal GitHub sign-in or sign-out, a connection approval and token exchange through a real AI host, or a real change confirmation. See the [sign-out and HSTS release](docs/changes/change-20261029-sign-out-and-hsts/verification.md#production-release), the [change confirmation release](docs/changes/change-20261028-change-confirmation/verification.md#production-release) and the [DCR release record](docs/note/note-20261020-dcr-production-release.md).
 
 ## How it works
 
