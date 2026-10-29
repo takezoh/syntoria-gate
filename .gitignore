@@ -17,3 +17,6 @@ infra/.terraform/
 .terraform/
 *.tfstate
 *.tfstate.*
+# Terraform variable files carry deployment identifiers such as the GCP project.
+*.tfvars
+*.tfvars.json
