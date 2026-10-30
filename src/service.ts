@@ -21,11 +21,45 @@ class HttpFailure extends Error {
   constructor(readonly status:number) { super('Request failed'); }
 }
 
+class BrowserApprovalFailure extends HttpFailure {
+  constructor(status:number,readonly reason:string) { super(status); }
+}
+
 function oneHeader(req:IncomingMessage,name:string):string|undefined {
   const values:string[]=[];
   for(let index=0;index<req.rawHeaders.length;index+=2) if(req.rawHeaders[index]!.toLowerCase()===name.toLowerCase()) values.push(req.rawHeaders[index+1]!);
   if(values.length>1)throw new HttpFailure(400);
   return values[0];
+}
+
+function browserApprovalHeaderClass(req:IncomingMessage,name:'origin'|'referer',issuer:string):string {
+  const values:string[]=[];
+  for(let index=0;index<req.rawHeaders.length;index+=2) if(req.rawHeaders[index]!.toLowerCase()===name) values.push(req.rawHeaders[index+1]!);
+  if(values.length===0)return 'absent';
+  if(values.length>1)return 'multiple';
+  const value=values[0]!;
+  if(name==='origin') {
+    if(value==='null')return 'opaque';
+    if(value===issuer)return 'same-origin';
+    try { const url=new URL(value);return url.protocol===new URL(issuer).protocol&&url.origin===issuer?'noncanonical-same-origin':'foreign-origin'; }
+    catch { return 'invalid'; }
+  }
+  try {
+    const url=new URL(value);
+    return url.protocol===new URL(issuer).protocol&&url.origin===issuer&&!url.username&&!url.password?'same-origin':'foreign-origin';
+  } catch { return 'invalid'; }
+}
+
+function logBrowserApprovalDenial(req:IncomingMessage,issuer:string,reason:string) {
+  console.warn(JSON.stringify({event:'browser_approval_denied',reason,origin:browserApprovalHeaderClass(req,'origin',issuer),referer:browserApprovalHeaderClass(req,'referer',issuer)}));
+}
+
+function sameIssuerReferer(value:string|undefined,issuer:string):boolean {
+  if(!value)return false;
+  try {
+    const url=new URL(value);
+    return url.protocol===new URL(issuer).protocol&&url.origin===issuer&&!url.username&&!url.password;
+  } catch { return false; }
 }
 
 function cookie(req:IncomingMessage,name:string):string|undefined {
@@ -61,11 +95,11 @@ const ICONS={
   warn:'<div class="icon warn"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7A4B00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5"/><path d="M12 16.2v0.1"/></svg></div>',
 };
 
-interface PageOptions { status?: number; account?: string; lead?: string; footer?: string }
+interface PageOptions { status?: number; account?: string; lead?: string; footer?: string; referrerPolicy?: 'same-origin' }
 
 function page(res:ServerResponse,title:string,body:string,formActionOrigin?:string,options:PageOptions={}) {
   const formAction=formActionOrigin?`'self' ${formActionOrigin}`:"'self'";
-  res.writeHead(options.status??200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':`default-src 'none'; style-src ${PAGE_STYLE_SOURCE}; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,'x-content-type-options':'nosniff'});
+  res.writeHead(options.status??200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':`default-src 'none'; style-src ${PAGE_STYLE_SOURCE}; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,'x-content-type-options':'nosniff',...(options.referrerPolicy?{'referrer-policy':options.referrerPolicy}:{})});
   const account=options.account?`<span class="who">${escape(options.account)}</span>`:'';
   res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${PAGE_STYLE}</style><body><header class="bar"><span class="brand">${SHIELD}Gate</span>${account}</header><main>${options.lead??''}<h1>${title}</h1>${body}</main>${options.footer??''}</body></html>`);
 }
@@ -286,31 +320,36 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     if(!identitySession||!cookies.binding)throw new HttpFailure(401);
     const approval=await storage.browserApproval(ids[0]!,cookies.binding,identitySession.userId);
     if(!approval)throw new HttpFailure(403);
-    const body=`<p>${escape(approval.appName)} requested a shared browser session.</p><p>Approving creates a device connection with full access to registered suite resources. Device: ${escape(approval.deviceLabel)}.</p><form method="post" class="actions"><input type="hidden" name="transaction" value="${escape(ids[0]!)}"><input type="hidden" name="csrf" value="${escape(approval.csrf)}"><button class="primary" name="decision" value="approve">Approve this device</button><button class="secondary" name="decision" value="deny">Deny</button></form>`;
+    const body=`<p>${escape(approval.appName)} requested a shared browser session.</p><p>Approving creates a device connection with full access to registered suite resources. Device: ${escape(approval.deviceLabel)}.</p><form method="post" action="/browser/approve" class="actions"><input type="hidden" name="transaction" value="${escape(ids[0]!)}"><input type="hidden" name="csrf" value="${escape(approval.csrf)}"><button class="primary" name="decision" value="approve">Approve this device</button><button class="secondary" name="decision" value="deny">Deny</button></form>`;
     const redirectOrigin=new URL(approval.redirectUri).origin;
-    page(res,'Approve device',body,redirectOrigin);
+    page(res,'Approve device',body,redirectOrigin,{referrerPolicy:'same-origin'});
   }
   async function submitBrowserApproval(req:IncomingMessage,res:ServerResponse) {
     const origin=oneHeader(req,'origin');
-    if(origin!==config.issuer)throw new HttpFailure(403);
+    if(origin===undefined) {
+      const referer=oneHeader(req,'referer');
+      if(!sameIssuerReferer(referer,config.issuer))throw new BrowserApprovalFailure(403,referer===undefined?'origin_and_referer_missing':'referer_not_same_origin');
+    } else if(origin==='null')throw new BrowserApprovalFailure(403,'origin_opaque');
+    else if(origin!==config.issuer)throw new BrowserApprovalFailure(403,'origin_mismatch');
     const values=await form(req);
     if(values.getAll('transaction').length!==1||values.getAll('csrf').length!==1||values.getAll('decision').length!==1||[...values.keys()].some(key=>!['transaction','csrf','decision'].includes(key)))throw new HttpFailure(400);
     const transaction=values.get('transaction')!,csrf=values.get('csrf')!,decision=values.get('decision');
     if(decision!=='approve'&&decision!=='deny')throw new HttpFailure(400);
     const cookies=authCookies(req);
     const identitySession=cookies.identity?await storage.identity(cookies.identity):undefined;
-    if(!identitySession||!cookies.binding)throw new HttpFailure(401);
+    if(!identitySession||!cookies.binding)throw new BrowserApprovalFailure(401,'identity_or_binding_missing');
     const approval=await storage.browserApproval(transaction,cookies.binding,identitySession.userId);
-    if(!approval||!equal(approval.csrf,csrf))throw new HttpFailure(403);
+    if(!approval)throw new BrowserApprovalFailure(403,'approval_missing_expired_or_unbound');
+    if(!equal(approval.csrf,csrf))throw new BrowserApprovalFailure(403,'csrf_mismatch');
     if(decision==='deny') {
       const redirect=await storage.denyBrowserApproval(transaction,cookies.binding,identitySession.userId);
-      if(!redirect)throw new HttpFailure(403);
+      if(!redirect)throw new BrowserApprovalFailure(403,'approval_consumed_or_expired');
       setCookies(res,[clearLoginCookie()]);
       res.writeHead(303,{location:redirect,'cache-control':'no-store'});res.end();return;
     }
     const secret=random(),connectionId=random(),csrfToken=random();
     const result=await storage.completeBrowserApproval(transaction,cookies.binding,identitySession.userId,secret,{userId:identitySession.userId,connectionId,csrf:csrfToken},config.browserSessionTtlSeconds);
-    if(!result)throw new HttpFailure(403);
+    if(!result)throw new BrowserApprovalFailure(403,'approval_consumed_or_expired');
     setCookies(res,[sessionCookie(secret,config),clearLoginCookie()]);
     res.writeHead(303,{location:result.redirectUri,'cache-control':'no-store'});res.end();
   }
@@ -475,7 +514,15 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
       if(req.method==='OPTIONS'&&(path==='/browser/session'||path==='/browser/logout')){preflight(req,res,config,path);return;}
       if(path==='/browser/login'&&req.method==='GET'){await startBrowserLogin(req,res,url);return;}
       if(path==='/browser/approve'&&req.method==='GET'){await browserApprovalPage(req,res,url);return;}
-      if(path==='/browser/approve'&&req.method==='POST'){await submitBrowserApproval(req,res);return;}
+      if(path==='/browser/approve'&&req.method==='POST'){
+        try { await submitBrowserApproval(req,res); }
+        catch(error) {
+          const reason=error instanceof BrowserApprovalFailure?error.reason:error instanceof HttpFailure?`request_rejected_${error.status}`:'internal_error';
+          logBrowserApprovalDenial(req,config.issuer,reason);
+          throw error;
+        }
+        return;
+      }
       if(path==='/browser/session/introspect'&&req.method==='POST'){
         let authorization:string|undefined;
         try {authorization=oneHeader(req,'authorization');} catch {jsonFailure(res,401);return;}

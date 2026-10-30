@@ -26,6 +26,8 @@ For repeated approval prompts, inspect whether the shared cookie is actually sen
 
 The SDK uses 503 for an authorization outage or unusable upstream response. Preserve the user's pending work and offer retry; do not automatically discard proposals or create a new mutation ID after an unknown result. Application-specific write fencing and recovery belong to the receiving API.
 
+Device approval is separate from SPA API requests: its form sets `Referrer-Policy: same-origin`, and a POST with no Origin is accepted only with an HTTP(S) Referer whose parsed origin matches Gate. Explicit null or foreign Origin values remain denied. If `/browser/approve` returns 403, inspect the structured `browser_approval_denied` reason and header classifications; logs omit header values, URLs and credentials. A hosted incident's cause remains unconfirmed until the browser flow is reproduced there.
+
 ## Managed certificate remains pending
 
 Compare Cloud Run's required DNS records with both authoritative and public DNS responses. For direct domain mapping, the Cloudflare API-host records must be DNS-only, pointing to the returned Google target. Check for conflicting records, stale responses and CAA restrictions along the name's resolution chain. Confirm that the mapping targets the intended service and region and that HTTP reaches Google Frontend.

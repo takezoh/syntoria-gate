@@ -53,8 +53,15 @@ OIDC grant and a connection bound to the account and client.
 
 For a browser device, approval is bound to the verified identity and login-binding
 cookie. Its transaction expires after ten minutes and is consumed atomically with
-creation of the shared browser session and device connection. An already approved,
-active browser device can be reused by other registered browser applications.
+creation of the shared browser session and device connection. The approval form
+sets `Referrer-Policy: same-origin` and posts to an explicit same-origin path. Its
+POST requires the exact Gate Origin, or, only when Origin is absent, an HTTP(S)
+Referer whose parsed origin matches the issuer. Explicit `Origin: null`, foreign
+origins, and missing or foreign Referer values are rejected. CSRF, identity, login-binding, expiry and
+single-use checks still apply. Failed device-approval POSTs log bounded reason
+codes and header classifications without recording header values or request data.
+An already approved, active browser device can be reused by other registered
+browser applications.
 
 Approving a connection gives it access to Gate's registered suite resources,
 subject to each resource API's own explicit user admission and data boundaries.

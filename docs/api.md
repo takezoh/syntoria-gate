@@ -14,7 +14,7 @@ Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, s
 | --- | --- | --- |
 | `GET /browser/login` | Exactly `app_id` and `redirect_uri`, matching a registration | 303 to GitHub, device approval or the registered return page for an active session |
 | `GET /browser/approve` | Gate-issued `transaction`; host-only login and identity cookies | HTML device approval form |
-| `POST /browser/approve` | Form fields `transaction`, `csrf`, `decision=approve\|deny`; issuer Origin and bound cookies | 303 to the registered return page; approval creates the connection/session and sets the common cookie |
+| `POST /browser/approve` | Form fields `transaction`, `csrf`, `decision=approve\|deny`; exact Gate Origin, or a same-origin HTTP(S) Referer only when Origin is absent; bound cookies | 303 to the registered return page; approval creates the connection/session and sets the common cookie |
 | `GET /browser/session` | Registered SPA Origin, credentials; no Authorization header | 200 `{csrf_token}` for the active browser session |
 | `POST /browser/logout` | Registered SPA Origin, credentials, JSON `{}`, `X-CSRF-Token` | 204, atomic current-device revocation and session deletion; also ends Gate sign-in on this browser; clears the shared and identity cookies |
 | `POST /browser/session/introspect` | Resource Basic authentication and JSON `{session,resource}` | 200 active session claims or `{active:false}` |
@@ -22,6 +22,8 @@ Read `GET /.well-known/openid-configuration` for provider-owned endpoint URLs, s
 | `OPTIONS /browser/logout` | Registered Origin, requested method POST | 204 for allowed preflight |
 
 Browser preflights accept only `Content-Type` and `X-CSRF-Token` request headers. Credentialed responses echo the exact permitted Origin and use `Vary`; no wildcard origin is used. Server-to-server introspection is not a public SPA endpoint. Form and JSON bodies parsed by Gate's custom handlers are limited to 8192 bytes, except change confirmation requests, which are limited to 16384 bytes. An oversized JSON body returns 413.
+
+The device approval form posts to `/browser/approve` and sets `Referrer-Policy: same-origin`. Its POST accepts an HTTP(S) Referer whose parsed origin matches the Gate issuer only when the Origin header is absent. An explicit `Origin: null`, a foreign Origin, or a missing/foreign Referer is rejected. The form's CSRF token, initiating-browser cookies, verified identity, transaction expiry and single-use checks remain required. Other Gate form POSTs continue to require their documented Origin checks. Failed device-approval POSTs emit structured reason codes and header classifications without logging header values, URLs or credentials. A hosted browser incident's cause remains unconfirmed until reproduced there.
 
 ### Session introspection
 
