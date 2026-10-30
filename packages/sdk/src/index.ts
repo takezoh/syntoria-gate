@@ -325,6 +325,57 @@ export function createGateConfirmations(config: GateConfirmationConfig, dependen
   return Object.freeze({ create, consume, cancel });
 }
 
+export interface GateConnectionCheck {
+  readonly subject: string;
+  readonly connectionId: string;
+  readonly clientId: string;
+}
+
+/**
+ * Asks Gate whether one exact OAuth connection still authorizes the resource, without a user token and without caching.
+ * `invalid` is Gate's authoritative answer; outages, credential rejection and malformed answers throw GateError(503).
+ */
+export function createGateConnections(config: GateConfirmationConfig, dependencies: GateDependencies = {}) {
+  if (config.allowLoopbackHttp && process.env.NODE_ENV === 'production') {
+    throw new TypeError('Loopback HTTP is forbidden in production');
+  }
+  safeUrl(config.issuer, config.allowLoopbackHttp === true);
+  if (![config.clientId, config.clientSecret].every(nonempty)) throw new TypeError('Invalid Gate connection configuration');
+  const timeoutMs = config.timeoutMs ?? 3000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new TypeError('Invalid Gate timeout');
+  const url = `${config.issuer.replace(/\/$/u, '')}/connections/check`;
+  const authorization = `Basic ${Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`, 'utf8').toString('base64')}`;
+  const fetcher = dependencies.fetch ?? globalThis.fetch;
+
+  async function check(input: GateConnectionCheck): Promise<'valid' | 'invalid'> {
+    if (![input.subject, input.connectionId, input.clientId].every(nonempty)) throw new TypeError('Invalid connection check');
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new GateError(503)); }, timeoutMs);
+    });
+    async function send() {
+      const response = await fetcher(url, {
+        method: 'POST', redirect: 'error', signal: controller.signal,
+        headers: { accept: 'application/json', 'content-type': 'application/json', authorization },
+        body: JSON.stringify({ subject: input.subject, connection_id: input.connectionId, client_id: input.clientId }),
+      });
+      if (response.redirected || (response.url && response.url !== url) || response.status !== 200) {
+        await response.body?.cancel();
+        throw new GateError(503);
+      }
+      const data = await readJson(response, controller.signal);
+      if (typeof data.valid !== 'boolean') throw new GateError(503);
+      return data.valid ? 'valid' as const : 'invalid' as const;
+    }
+    try { return await Promise.race([send(), timeout]); }
+    catch (error) { throw error instanceof GateError ? error : new GateError(503); }
+    finally { clearTimeout(timer); controller.abort(); }
+  }
+
+  return Object.freeze({ check });
+}
+
 export function protectedResourceMetadata(resource: string, issuer: string) {
   safeUrl(resource, false);
   safeUrl(issuer, false);

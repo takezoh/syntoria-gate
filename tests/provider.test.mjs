@@ -214,7 +214,17 @@ async function assertConfirmations(connectionId,webClient) {
  assert.deepEqual(await consume(foreignId,'decision-4'),{status:'pending'},'Another resource cannot cancel');
 
  // Revoking or outliving the connection ends its confirmations.
- const revocable=await connect(webClient);const revocableId=(await introspect(revocable.access_token)).json().connection_id;
+ const revocable=await connect(webClient);const revocablePrincipal=(await introspect(revocable.access_token)).json(),revocableId=revocablePrincipal.connection_id;
+ // Connection validity: only the exact active OAuth connection of the account and its own client is valid.
+ const check=(body,resource)=>confirmationApi('/connections/check',body,resource);
+ const exact={subject:'github:12345',connection_id:revocableId,client_id:revocablePrincipal.client_id};
+ assert.deepEqual((await check(exact)).json(),{valid:true});
+ assert.deepEqual((await check(exact,config.resources[1])).json(),{valid:true},'any configured resource may check');
+ for(const variant of [{client_id:'other-client'},{subject:'github:99999'},{connection_id:'missing-connection'}])assert.deepEqual((await check({...exact,...variant})).json(),{valid:false},JSON.stringify(variant));
+ assert.equal((await request('/connections/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(exact)})).status,401);
+ assert.equal((await check(exact,{client_id:'weave',client_secret:'x'.repeat(40)})).status,401);
+ for(const body of [{...exact,extra:true},{subject:exact.subject,connection_id:exact.connection_id},{...exact,client_id:''},{...exact,connection_id:7}])assert.equal((await check(body)).status,400,JSON.stringify(body));
+ assert.equal((await request('/connections/check',{method:'POST',headers:{authorization:resourceAuthorization(),'content-type':'application/json'},body:JSON.stringify({padding:'x'.repeat(3_000)})})).status,413);
  const pendingOnRevoked=await createId('revoked-1',{connection_id:revocableId});
  const approvedOnRevoked=await createId('revoked-2',{connection_id:revocableId});
  assert.equal((await decide({id:approvedOnRevoked,csrf,decision:'approve'})).status,303);
@@ -223,6 +233,7 @@ async function assertConfirmations(connectionId,webClient) {
  assert.equal((await decide({id:pendingOnRevoked,csrf,decision:'approve'})).status,409);
  assert.deepEqual(await consume(approvedOnRevoked,'revoked-2'),{status:'expired'});
  assert.equal((await create('after-revoke',{connection_id:revocableId})).status,403);
+ assert.deepEqual((await check(exact)).json(),{valid:false},'a revoked connection is no longer valid');
  const afterGrant=new Storage(db,namespace,()=>Date.now()+31*86400_000);
  assert.deepEqual(await afterGrant.consumeConfirmation(foreignId,'weave','decision-4',changeHash('decision-4')),{status:'expired'});
  assert.equal(await afterGrant.decideConfirmation(foreignId,'github:12345','approve'),'invalid');

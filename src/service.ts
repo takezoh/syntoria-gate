@@ -7,6 +7,7 @@ import { adapter } from './storage.js';
 import { InvalidDcrMetadataError, parseDcrMetadata, REGISTRATION_BODY_LIMIT } from './registration.js';
 import { CONFIRMATION_BODY_LIMIT, InvalidConfirmationError, isConfirmationId, parseCancelRequest, parseConfirmationRequest, parseConsumeRequest } from './confirmation.js';
 import type { Confirmation } from './storage.js';
+import { CONNECTION_CHECK_BODY_LIMIT, InvalidConnectionCheckError, parseConnectionCheckRequest } from './connection-check.js';
 
 const random=()=>randomBytes(32).toString('base64url');
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
@@ -500,6 +501,16 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     }
   }
 
+  /** Answers a configured resource whether an exact connection still authorizes it; unknown IDs and mismatches are simply not valid. */
+  async function connectionCheck(req:IncomingMessage,res:ServerResponse) {
+    const resource=registeredResource(req,config);
+    if(!resource) {jsonFailure(res,401);return;}
+    let input;
+    try {input=parseConnectionCheckRequest(await jsonBody(req,CONNECTION_CHECK_BODY_LIMIT));}
+    catch(error) {if(error instanceof InvalidConnectionCheckError) {jsonFailure(res,400);return;}throw error;}
+    json(res,200,{valid:input.subject===accountId&&await storage.connectionValid(input.connection_id,input.subject,input.client_id)});
+  }
+
   async function handler(req:IncomingMessage,res:ServerResponse) {
     let path='';
     try {
@@ -533,6 +544,7 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
       if(path==='/browser/logout'&&req.method==='POST'){await browserLogout(req,res);return;}
       if(path.startsWith('/browser/')){res.writeHead(404,{'cache-control':'no-store'});res.end('Not found');return;}
       if(req.method==='POST'&&(path==='/confirmations'||path==='/confirmations/consume'||path==='/confirmations/cancel')){await confirmationApi(req,res,path);return;}
+      if(path==='/connections/check'&&req.method==='POST'){await connectionCheck(req,res);return;}
       if(path==='/confirm'&&req.method==='GET'){await showConfirmation(req,res,url);return;}
       if(path==='/confirm'&&req.method==='POST'){await decideConfirmation(req,res);return;}
       if(path==='/confirm/sign-in'&&req.method==='GET'){await confirmationSignIn(req,res,url);return;}
@@ -636,11 +648,11 @@ export async function createService(config:Config,storage:Storage,identity:GitHu
     } catch(error) {
       if(res.headersSent){res.end();return;}
       if(error instanceof HttpFailure) {
-        if(path==='/browser/session'||path==='/browser/logout'||path.startsWith('/confirmations'))jsonFailure(res,error.status);
+        if(path==='/browser/session'||path==='/browser/logout'||path.startsWith('/confirmations')||path==='/connections/check')jsonFailure(res,error.status);
         else {res.writeHead(error.status,{'cache-control':'no-store'});res.end(error.status===401?'Unauthorized':error.status===403?'Forbidden':'Request failed');}
         return;
       }
-      if(path.startsWith('/browser/')||path.startsWith('/confirmations')) {jsonFailure(res,503);return;}
+      if(path.startsWith('/browser/')||path.startsWith('/confirmations')||path==='/connections/check') {jsonFailure(res,503);return;}
       res.writeHead(400,{'cache-control':'no-store'});res.end('Request failed');
     }
   }

@@ -80,6 +80,16 @@ Only `consumed` authorizes the change. Missing or wrong resource credentials ret
 
 The approval page shows the requesting client's unverified name from Gate's own connection record, the resource audience and every summary line, HTML-escaped. Before sign-in, Gate shows the same page for every well-formed ID. A different signed-in account, or an unknown ID, receives 404. Gate deletes the summary when the person denies, or when the resource consumes or cancels the confirmation.
 
+## Connection validity
+
+A resource that acts for a connection without one of its tokens, for example to deliver a subscribed event, asks Gate whether that exact connection still authorizes it.
+
+| Endpoint | Authentication and body | Response |
+|---|---|---|
+| `POST /connections/check` | Resource Basic authentication; JSON `{subject,connection_id,client_id}` | 200 `{valid}` |
+
+`valid` is true only for an approved, unrevoked OAuth connection of the configured account, created for exactly that client and backed by an unexpired grant. Browser connections, other accounts, other clients and unknown IDs are `false`; the answer never says which. Gate keeps no state for the call, and the resource must not cache a true answer. Missing or wrong resource credentials return 401, invalid bodies 400, oversized bodies 413 and storage failures 503.
+
 ## Management and health
 
 | Method and path | Behavior |

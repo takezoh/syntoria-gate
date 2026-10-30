@@ -104,6 +104,17 @@ await confirmations.cancel(id, reference);
 
 `create` fails with `GateError(401)` when the requesting connection is no longer active. Any other failure, including an unexpected status or a malformed response, is `GateError(503)`.
 
+## Connection validity without a token
+
+A resource that keeps working for a connection after the request ends, such as delivering a subscribed event, has no access token to introspect later. It stores the verified `subject`, `connection_id` and `client_id` from the original request and checks them online immediately before each action. The [HTTP interface](api.md#connection-validity) defines the call.
+
+```ts
+const connections = createGateConnections({ issuer, clientId, clientSecret });
+if (await connections.check({ subject, connectionId, clientId }) === 'invalid') stopWorkForConnection();
+```
+
+`invalid` is Gate's authoritative answer. Any other outcome, including credential rejection, an unexpected status or a malformed response, is `GateError(503)`: neither proof of validity nor of revocation. Never cache `valid`.
+
 ## Shared-cookie trust boundary
 
 The parent-scoped cookie is sent to matching sibling hosts. All services under that cookie scope must be trusted; do not place unrelated or user-controlled hosting beneath it. HttpOnly prevents JavaScript from reading the cookie but does not stop injected JavaScript from making authenticated requests. Applications remain responsible for XSS prevention, Origin/CSRF enforcement and user-scoped persistence. CORS governs browser access and is not a substitute for authentication.

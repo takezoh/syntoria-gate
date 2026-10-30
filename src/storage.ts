@@ -301,6 +301,10 @@ export class Storage {
     if (!connection.exists || connection.get('kind') !== 'oauth' || connection.get('approved') !== true || connection.get('revoked') === true || connection.get('userId') !== userId || !grant.exists || !activeTimestamp(expiresAt, this.now())) return undefined;
     return { clientId: connection.get('clientId') as string, clientName: connection.get('clientName') as string | undefined, expiresAt };
   }
+  /** True only for the exact client's approved, unrevoked OAuth connection of the account with an unexpired grant. */
+  async connectionValid(id: string, userId: string, clientId: string): Promise<boolean> {
+    return this.db.runTransaction(async tx => (await this.activeConnection(tx, id, userId))?.clientId === clientId);
+  }
   private async readConfirmation(tx: Transaction, id: string) {
     const snapshot = await tx.get(this.confirmation(id));
     return snapshot.exists ? snapshot.data() as Confirmation : undefined;

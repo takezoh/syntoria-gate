@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { createGateConfirmations, createGateVerifier, GateError, protectedResourceMetadata } from '../packages/sdk/dist/index.js';
+import { createGateConfirmations, createGateConnections, createGateVerifier, GateError, protectedResourceMetadata } from '../packages/sdk/dist/index.js';
 
 const issuer = 'https://gate.example/realms/syntoria';
 const endpoint = `${issuer}/protocol/openid-connect/token/introspect`;
@@ -331,4 +331,34 @@ test('confirmations: one deadline bounds each call and loopback HTTP stays test-
   assert.throws(() => createGateConfirmations({ issuer: 'http://gate.example', clientId: 'resource', clientSecret: 'secret' }), TypeError);
   assert.throws(() => createGateConfirmations({ issuer, clientId: '', clientSecret: 'secret' }), TypeError);
   assert.ok(createGateConfirmations({ issuer: 'http://127.0.0.1:1', clientId: 'resource', clientSecret: 'secret', allowLoopbackHttp: true }));
+});
+
+test('connections: check sends the exact contract with resource credentials and never caches', async () => {
+  const calls = [];
+  let answer = { valid: true };
+  const connections = createGateConnections({ issuer, clientId: 'resource', clientSecret: 'secret' }, { fetch: async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify(answer), { status: 200, headers: { 'content-type': 'application/json' } }); } });
+  assert.equal(await connections.check({ subject: 'person-a', connectionId: 'connection-a', clientId: 'client-a' }), 'valid');
+  answer = { valid: false };
+  assert.equal(await connections.check({ subject: 'person-a', connectionId: 'connection-a', clientId: 'client-a' }), 'invalid');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, `${issuer}/connections/check`);
+  assert.equal(calls[0].init.redirect, 'error');
+  assert.equal(calls[0].init.headers.authorization, `Basic ${Buffer.from('resource:secret').toString('base64')}`);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { subject: 'person-a', connection_id: 'connection-a', client_id: 'client-a' });
+});
+
+test('connections: every answer other than an exact boolean is unavailable, never invalid', async () => {
+  const respond = [
+    () => new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } }),
+    () => new Response('{}', { status: 503, headers: { 'content-type': 'application/json' } }),
+    () => new Response(JSON.stringify({ valid: 'true' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    () => new Response(JSON.stringify({ valid: true }), { status: 200, headers: { 'content-type': 'text/plain' } }),
+    () => { throw new TypeError('network'); },
+  ];
+  for (const make of respond) {
+    const connections = createGateConnections({ issuer, clientId: 'resource', clientSecret: 'secret' }, { fetch: async () => make() });
+    await assert.rejects(connections.check({ subject: 'person-a', connectionId: 'connection-a', clientId: 'client-a' }), error => error instanceof GateError && error.status === 503);
+  }
+  const stalled = createGateConnections({ issuer, clientId: 'resource', clientSecret: 'secret', timeoutMs: 20 }, { fetch: (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted')))) });
+  await assert.rejects(stalled.check({ subject: 'person-a', connectionId: 'connection-a', clientId: 'client-a' }), error => error instanceof GateError && error.status === 503);
 });
